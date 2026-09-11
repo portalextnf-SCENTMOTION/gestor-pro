@@ -44,6 +44,44 @@
   #topbar .sub{font-size:12px;color:var(--muted);margin-top:2px;}
   #content{padding:24px;flex:1;overflow-x:auto;}
 
+  /* ===== Mobile layout: fixed, compact sidebar that stays visible while scrolling ===== */
+  @media (max-width: 900px){
+    #shell{display:block;}
+    #sidebar{
+      position:fixed; top:0; left:0; bottom:0; width:66px; z-index:40;
+      overflow-y:auto; padding:10px 0; -ms-overflow-style:none; scrollbar-width:none;
+    }
+    #sidebar::-webkit-scrollbar{display:none;}
+    #sidebar .brand{font-size:0; padding:0 0 10px; margin-bottom:8px; justify-content:center;}
+    #sidebar .brand .dot{width:10px;height:10px;flex-shrink:0;}
+    #sidebar nav{padding:0 6px;}
+    #sidebar nav button{flex-direction:column; gap:3px; padding:9px 2px; font-size:9px; line-height:1.15; text-align:center; border-radius:8px; overflow-wrap:anywhere; word-break:break-word; hyphens:auto;}
+    #sidebar nav button span{font-size:19px;}
+    #sidebar .foot{display:none;}
+
+    #main{margin-left:66px; width:calc(100% - 66px); min-height:100vh;}
+    #topbar{flex-wrap:wrap; row-gap:10px; padding:12px 14px;}
+    #topbar > div:first-child{width:100%;}
+    #topbar h1{font-size:16px;}
+    #topbar > div:last-child{flex-wrap:wrap; row-gap:8px; justify-content:flex-start !important; width:100%;}
+    .save-indicator{font-size:11px;}
+    .btn-sm{padding:6px 9px;font-size:11.5px;}
+
+    #content{padding:12px;}
+    .toolbar{gap:8px;}
+    .toolbar .search{width:100%; min-width:0;}
+    .cards{grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px;}
+    .panel{padding:12px; overflow-x:auto; -webkit-overflow-scrolling:touch;}
+    .panel table{width:auto; min-width:100%;}
+    .panel table td, .panel table th{white-space:nowrap;}
+  }
+  @media (max-width: 420px){
+    #sidebar{width:58px;}
+    #main{margin-left:58px; width:calc(100% - 58px);}
+    #sidebar nav button{font-size:8.5px; padding:8px 1px;}
+    #sidebar nav button span{font-size:17px;}
+  }
+
   /* Login screen */
   #login-screen{position:fixed;inset:0;background:var(--page);display:none;align-items:center;justify-content:center;z-index:200;}
   #login-screen.open{display:flex;}
