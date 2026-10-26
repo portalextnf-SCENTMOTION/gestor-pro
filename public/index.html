@@ -202,7 +202,8 @@
 <div id="login-screen">
   <div class="login-box">
     <div class="login-brand"><span class="dot"></span> Gestor Pro</div>
-    <p class="login-sub">Introduce la contraseña de acceso</p>
+    <p class="login-sub">Inicia sesión para continuar</p>
+    <input type="text" id="login-username" placeholder="Usuario" autocomplete="username" autocapitalize="off" style="margin-bottom:10px;">
     <input type="password" id="login-password" placeholder="Contraseña" autocomplete="current-password">
     <button class="btn btn-primary" id="login-submit-btn" style="width:100%;margin-top:12px;">Entrar</button>
     <div class="login-error" id="login-error"></div>
@@ -501,13 +502,15 @@ const NAV_ITEMS = [
   { id:'expenses', label:'Ingresos y Gastos', icon:'&#128181;' },
   { id:'settings', label:'Datos y ajustes', icon:'&#9881;' }
 ];
+let CURRENT_USER = null;
 function renderNav(){
   const nav = document.getElementById('nav');
-  nav.innerHTML = NAV_ITEMS.map(item=>
+  const items = NAV_ITEMS.concat(CURRENT_USER && CURRENT_USER.role==='admin' ? [{ id:'users', label:'Usuarios', icon:'&#128274;' }] : []);
+  nav.innerHTML = items.map(item=>
     `<button data-view="${item.id}" class="${state.view===item.id?'active':''}"><span>${item.icon}</span>${item.label}</button>`
   ).join('');
   nav.querySelectorAll('button').forEach(b=>b.addEventListener('click', ()=>{ state.view=b.dataset.view; state.search=''; render(); }));
-  document.getElementById('companyFoot').textContent = DB.company.name + ' · ' + DB.company.taxId;
+  document.getElementById('companyFoot').textContent = DB.company.name + (DB.company.taxId?' · '+DB.company.taxId:'') + (CURRENT_USER?' · 👤 '+CURRENT_USER.username:'');
 }
 
 /* ===================== MODAL ===================== */
@@ -540,14 +543,16 @@ function render(){
     suppliers:['Proveedores','Directorio de proveedores'],
     invoices:['Facturas','Facturación a clientes'],
     expenses:['Ingresos y Gastos','Ingresos, gastos y compras/ventas de stock'],
-    settings:['Datos y ajustes','Empresa, IVA, copia de seguridad']
+    settings:['Datos y ajustes','Empresa, IVA, copia de seguridad'],
+    users:['Usuarios','Administración de usuarios y contraseñas']
   };
   document.getElementById('viewTitle').textContent = titles[state.view][0];
   document.getElementById('viewSub').textContent = titles[state.view][1];
   const c = document.getElementById('content');
-  const renderers = { dashboard:renderDashboard, statistics:renderStatistics, products:renderProducts, movements:renderMovements, orders:renderOrders, clients:renderClients, suppliers:renderSuppliers, invoices:renderInvoices, expenses:renderExpenses, settings:renderSettings };
+  const renderers = { dashboard:renderDashboard, statistics:renderStatistics, products:renderProducts, movements:renderMovements, orders:renderOrders, clients:renderClients, suppliers:renderSuppliers, invoices:renderInvoices, expenses:renderExpenses, settings:renderSettings, users:renderUsers };
   c.innerHTML = renderers[state.view]();
   attachViewListeners();
+  if(state.view==='users') attachUsersListeners();
   if(typeof scheduleAutosave === 'function') scheduleAutosave();
 }
 
@@ -2322,6 +2327,68 @@ function renderSettings(){
   </div>`;
 }
 
+/* ===================== USUARIOS (solo administrador) ===================== */
+let USERS_LIST = null;
+async function loadUsers(){
+  const r = await fetch('/api/users');
+  if(r.ok){ USERS_LIST = (await r.json()).users; }
+  if(state.view==='users') render();
+}
+function renderUsers(){
+  if(!CURRENT_USER || CURRENT_USER.role!=='admin') return '<div class="panel">Sin permiso.</div>';
+  if(USERS_LIST===null){ loadUsers(); return '<div class="panel">Cargando usuarios…</div>'; }
+  const rows = USERS_LIST.map(u=>`<tr>
+    <td><strong>${esc(u.username)}</strong>${u.username===CURRENT_USER.username?' <span class="sub">(tú)</span>':''}</td>
+    <td>${u.role==='admin'?'Administrador':'Usuario'}</td>
+    <td style="text-align:right;white-space:nowrap;">
+      <button class="icon-btn" data-user-edit="${u.id}">Editar</button>
+      <button class="icon-btn" data-user-del="${u.id}">Eliminar</button>
+    </td></tr>`).join('');
+  return `<div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+      <h2 style="margin:0;">Usuarios</h2>
+      <button class="btn btn-primary" id="newUserBtn">+ Nuevo usuario</button>
+    </div>
+    <p style="font-size:13px;color:var(--ink-2);margin-top:0;">Cada usuario tiene sus propios datos, totalmente separados. Un usuario nuevo empieza sin datos.</p>
+    <table><thead><tr><th>Usuario</th><th>Tipo</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+  </div>`;
+}
+function userForm(u){
+  const isNew = !u;
+  openModal(isNew?'Nuevo usuario':'Editar usuario', `
+    <div class="field"><label>Nombre de usuario</label><input id="uf_name" value="${esc(u?u.username:'')}" autocomplete="off"></div>
+    <div class="field"><label>${isNew?'Contraseña':'Nueva contraseña (déjala vacía para no cambiarla)'}</label><input id="uf_pass" type="text" autocomplete="off" placeholder="Mínimo 6 caracteres"></div>
+    <div class="field"><label>Tipo</label><select id="uf_role"><option value="user" ${u&&u.role==='user'||isNew?'selected':''}>Usuario</option><option value="admin" ${u&&u.role==='admin'?'selected':''}>Administrador</option></select></div>
+    <div id="uf_err" class="login-error"></div>
+    <div style="display:flex;gap:10px;margin-top:14px;"><button class="btn btn-primary" id="uf_save">Guardar</button><button class="btn btn-secondary" id="uf_cancel">Cancelar</button></div>`,
+  ()=>{
+    document.getElementById('uf_cancel').onclick = closeModal;
+    document.getElementById('uf_save').onclick = async ()=>{
+      const body = { username:document.getElementById('uf_name').value, password:document.getElementById('uf_pass').value, role:document.getElementById('uf_role').value };
+      if(!isNew && !body.password) delete body.password;
+      const r = await fetch(isNew?'/api/users':'/api/users/'+u.id, { method:isNew?'POST':'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+      if(r.ok){
+        closeModal();
+        if(!isNew && u.username===CURRENT_USER.username && body.username.trim()!==u.username){ CURRENT_USER.username = body.username.trim(); }
+        USERS_LIST = null; render(); toast('Usuario guardado');
+      } else {
+        const e = document.getElementById('uf_err'); e.textContent = (await r.json().catch(()=>({}))).error || 'Error'; e.style.display='block';
+      }
+    };
+  });
+}
+function attachUsersListeners(){
+  const nb = document.getElementById('newUserBtn'); if(nb) nb.onclick = ()=>userForm(null);
+  document.querySelectorAll('[data-user-edit]').forEach(b=>b.onclick = ()=>userForm(USERS_LIST.find(u=>String(u.id)===b.dataset.userEdit)));
+  document.querySelectorAll('[data-user-del]').forEach(b=>b.onclick = async ()=>{
+    const u = USERS_LIST.find(x=>String(x.id)===b.dataset.userDel);
+    if(!confirm('¿Eliminar al usuario "'+u.username+'" y TODOS sus datos? Esta acción no se puede deshacer.')) return;
+    const r = await fetch('/api/users/'+u.id, { method:'DELETE' });
+    if(r.ok){ USERS_LIST = null; render(); toast('Usuario eliminado'); }
+    else { alert((await r.json().catch(()=>({}))).error || 'Error'); }
+  });
+}
+
 /* ===================== EXPORT / IMPORT ===================== */
 /* ===================== PANEL EXPORT (EXCEL / PDF) ===================== */
 function downloadBlob(filename, mime, content){
@@ -2950,24 +3017,27 @@ function showLoginScreen(){
   document.getElementById('shell').style.display = 'none';
   document.getElementById('login-screen').classList.add('open');
   const pwInput = document.getElementById('login-password');
+  const userInput = document.getElementById('login-username');
   const errBox = document.getElementById('login-error');
   const submit = async ()=>{
     errBox.style.display = 'none';
     const password = pwInput.value;
-    if(!password) return;
+    const username = userInput.value.trim();
+    if(!password || !username) return;
     try{
       const res = await fetch('/api/login', {
         method:'POST',
         headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ password })
+        body: JSON.stringify({ username, password })
       });
       if(res.ok){
+        CURRENT_USER = (await res.json()).user;
         document.getElementById('login-screen').classList.remove('open');
         document.getElementById('shell').style.display = '';
         boot();
       } else {
         const data = await res.json().catch(()=>({}));
-        errBox.textContent = data.error || 'Contraseña incorrecta';
+        errBox.textContent = data.error || 'Usuario o contraseña incorrectos';
         errBox.style.display = 'block';
         pwInput.value = '';
         pwInput.focus();
@@ -2979,7 +3049,8 @@ function showLoginScreen(){
   };
   document.getElementById('login-submit-btn').addEventListener('click', submit);
   pwInput.addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
-  pwInput.focus();
+  userInput.addEventListener('keydown', e=>{ if(e.key==='Enter') pwInput.focus(); });
+  userInput.focus();
 }
 
 async function loadInitialData(){
@@ -3013,8 +3084,9 @@ async function boot(){
 (async function(){
   try{
     const res = await fetch('/api/session');
-    const { authenticated } = await res.json();
-    if(authenticated){ boot(); } else { showLoginScreen(); }
+    const sess = await res.json();
+    const authenticated = sess.authenticated;
+    if(authenticated){ CURRENT_USER = sess.user; boot(); } else { showLoginScreen(); }
   }catch(err){
     showLoginScreen();
   }
