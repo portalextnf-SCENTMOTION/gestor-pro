@@ -943,6 +943,7 @@ function renderProducts(){
       ${stockFilterDropdownHtml()}
       <button class="btn btn-secondary" id="exportExcelBtn">Exportar Excel</button>
       <button class="btn btn-secondary" id="exportPdfBtn">Exportar PDF</button>
+      <button class="btn btn-secondary" id="exportProductsTxtBtn" title="Catálogo sin precios ni stock, listo para importar en otra cuenta">Exportar productos (.txt)</button>
       <button class="btn btn-primary" id="addProductBtn">+ Nuevo producto</button>
     </div>
   </div>
@@ -2828,6 +2829,14 @@ function attachViewListeners(){
   const dismiss = document.getElementById('dismissBanner');
   if(dismiss) dismiss.addEventListener('click', ()=>{ state.dismissedBanner = true; render(); });
 
+  const expTxt = document.getElementById('exportProductsTxtBtn');
+  if(expTxt) expTxt.addEventListener('click', ()=>{
+    const clean = v=>String(v??'').replace(/[;\r\n]+/g,' ').trim();
+    const lines = ['CODIGO;EAN;NOMBRE;CATEGORIA;COSTE;P_MINORISTA;P_MAYORISTA;MARCA;VALOR_MERCADO;;']
+      .concat(DB.products.map(p=>[clean(p.sku),clean(p.ean),clean(p.name),clean(p.category),'','','',clean(p.brand),'',''].join(';')));
+    downloadBlob('productos-sin-precios-'+new Date().toISOString().slice(0,10)+'.txt','text/plain;charset=utf-8',lines.join('\r\n')+'\r\n');
+    toast(DB.products.length+' productos exportados');
+  });
   const exportExcelBtn = document.getElementById('exportExcelBtn'); if(exportExcelBtn) exportExcelBtn.addEventListener('click', exportViewToExcel);
   const exportPdfBtn = document.getElementById('exportPdfBtn'); if(exportPdfBtn) exportPdfBtn.addEventListener('click', exportViewToPDF);
 
