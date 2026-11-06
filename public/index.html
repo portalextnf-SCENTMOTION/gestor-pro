@@ -205,6 +205,11 @@
   .type-chip:hover{background:#e2e2de;}
   .print-only{display:none;}
   @media print{ .print-only{display:block;} }
+
+.hist-row{cursor:pointer;}
+.hist-row:hover td{background:var(--bg-2,#f1f5f2);}
+.hist-doclink{color:#0f7a55;text-decoration:underline;text-decoration-style:dotted;font-weight:600;}
+.doc-hl td{background:#fff8d6 !important;}
 </style>
 </head>
 <body>
@@ -2573,20 +2578,20 @@ function historyLines(){
     const party = b.type==='in' ? (b.supplierId?getSupplier(b.supplierId):null) : (b.clientId?getClient(b.clientId):null);
     (b.items||[]).forEach(it=>{
       const paid = b.type==='out' ? (it.paid===undefined ? b.paymentStatus==='paid' : !!it.paid) : null;
-      lines.push({ date:b.date, kind:b.type, source:'batch', doc:b.name, docNote:b.reason||'', party:party?party.name:'', productId:it.productId, name:it.name, qty:it.qty, price:it.price, paid });
+      lines.push({ date:b.date, kind:b.type, source:'batch', docId:b.id, doc:b.name, docNote:b.reason||'', party:party?party.name:'', productId:it.productId, name:it.name, qty:it.qty, price:it.price, paid });
     });
   });
   DB.invoices.forEach(inv=>{
     if(inv.status==='draft') return;
     const cl = getClient(inv.clientId);
     (inv.items||[]).forEach(it=>{
-      lines.push({ date:inv.date, kind:'out', source:'invoice', doc:inv.number, docNote:'Factura', party:cl?cl.name:'', productId:it.productId, name:it.name, qty:it.qty, price:it.price, paid:inv.status==='paid' });
+      lines.push({ date:inv.date, kind:'out', source:'invoice', docId:inv.id, doc:inv.number, docNote:'Factura', party:cl?cl.name:'', productId:it.productId, name:it.name, qty:it.qty, price:it.price, paid:inv.status==='paid' });
     });
   });
   DB.orders.forEach(o=>{
     const cl = o.clientId ? getClient(o.clientId) : null;
     (o.items||[]).forEach(it=>{
-      lines.push({ date:o.date, kind:'order', source:'order', doc:o.name, docNote:o.status==='served'?'Pedido servido':'Pedido pendiente', party:cl?cl.name:'', productId:it.productId, name:it.name, qty:it.qty, price:it.price, paid:null, served:o.status==='served' });
+      lines.push({ date:o.date, kind:'order', source:'order', docId:o.id, doc:o.name, docNote:o.status==='served'?'Pedido servido':'Pedido pendiente', party:cl?cl.name:'', productId:it.productId, name:it.name, qty:it.qty, price:it.price, paid:null, served:o.status==='served' });
     });
   });
   return lines;
@@ -2767,9 +2772,9 @@ function histDynamicHtml(h){
     const badge = l.kind==='in' ? '<span class="badge badge-good">Entrada</span>' : (l.kind==='out' ? '<span class="badge badge-critical">Salida</span>' : '<span class="badge badge-blue">Pedido</span>');
     const qtyTxt = l.kind==='in' ? '+'+l.qty : (l.kind==='out' ? '−'+l.qty : String(l.qty));
     const pay = l.kind==='out' ? (l.paid ? '<span class="badge badge-good">Pagado</span>' : '<span class="badge badge-warning">Pendiente</span>') : '—';
-    return `<tr>
+    return `<tr class="hist-row" data-doc-src="${l.source}" data-doc-id="${esc(l.docId||'')}" data-doc-prod="${esc(l.productId||'')}" title="Clic para ver el documento">
       <td>${fmtDate(l.date)}</td><td>${badge}</td>
-      <td>${esc(l.doc)}${l.docNote?`<div class="sub" style="font-size:11px;">${esc(l.docNote)}</div>`:''}</td>
+      <td><span class="hist-doclink">${esc(l.doc||'(sin nombre)')}</span>${l.docNote?`<div class="sub" style="font-size:11px;">${esc(l.docNote)}</div>`:''}</td>
       <td>${esc(l.party||'—')}</td>
       ${h.productId?'':`<td>${esc(p?p.sku:'')}</td><td>${esc(p?p.name:l.name)}${p&&productTypeOf(p)?`<div class="sub" style="font-size:11px;">${esc(productTypeOf(p))}</div>`:''}</td>`}
       <td class="num">${qtyTxt}</td><td class="num">${fmtMoney(l.price)}</td><td class="num">${fmtMoney(l.qty*l.price)}</td><td>${pay}</td>
@@ -2779,7 +2784,7 @@ function histDynamicHtml(h){
   const cols = h.productId ? 8 : 10;
   const table = `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;">
     <table style="margin:0;"><thead>${head}</thead><tbody>${trs || `<tr><td colspan="${cols}" class="empty">No hay movimientos con estos filtros</td></tr>`}</tbody></table></div>
-    <div class="sub" style="margin-top:6px;font-size:11.5px;">${c.rows.length} movimientos${c.rows.length>LIMIT?` (se muestran los ${LIMIT} más recientes; al exportar salen todos)`:''}. Solo cuentan entradas y salidas confirmadas y facturas emitidas. El stock inicial y final se calcula con el stock actual deshaciendo los movimientos posteriores; no depende de los filtros de movimiento ni de proveedor/cliente.</div>`;
+    <div class="sub" style="margin-top:6px;font-size:11.5px;">${c.rows.length} movimientos · haz clic en una fila para ver el documento${c.rows.length>LIMIT?` (se muestran los ${LIMIT} más recientes; al exportar salen todos)`:''}. Solo cuentan entradas y salidas confirmadas y facturas emitidas. El stock inicial y final se calcula con el stock actual deshaciendo los movimientos posteriores; no depende de los filtros de movimiento ni de proveedor/cliente.</div>`;
   let prices = '';
   if(h.productId){
     const ch = histPriceChanges(h);
@@ -2788,6 +2793,93 @@ function histDynamicHtml(h){
       <tbody>${ch.map(e=>`<tr><td>${fmtDate(e.date)}</td><td>${esc(e.concept)}</td><td class="num">${e.oldValue==null?'alta':fmtMoney(e.oldValue)}</td><td class="num">${fmtMoney(e.newValue)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Sin cambios de precio en este periodo</td></tr>'}</tbody></table></div></details>`;
   }
   return cards + extra + table + prices;
+}
+
+/* ===== Ver el documento de un movimiento desde el historial (solo lectura) ===== */
+function openHistDocument(h, source, docId, focusProductId){
+  const back = ()=>openHistoryModal(h);
+  const hl = it => focusProductId && it.productId===focusProductId ? ' class="doc-hl"' : '';
+  const partyBlock = (label, p)=> p ? `<div style="margin-bottom:14px;font-size:13px;"><strong>${label}:</strong> ${esc(p.name)}${p.taxId?'<br>'+esc(p.taxId):''}${p.address?'<br>'+esc(p.address):''}${p.phone?'<br>Tel. '+esc(p.phone):''}${p.email?'<br>'+esc(p.email):''}</div>` : `<div style="margin-bottom:14px;font-size:13px;"><strong>${label}:</strong> —</div>`;
+  let title, body;
+  if(source==='batch'){
+    const b = DB.movementBatches.find(x=>x.id===docId);
+    if(!b){ toast('No se encuentra el documento (puede haberse eliminado)'); return; }
+    const isIn = b.type==='in';
+    const party = isIn ? (b.supplierId?getSupplier(b.supplierId):null) : (b.clientId?getClient(b.clientId):null);
+    const items = b.items||[];
+    const total = items.reduce((s,it)=>s+it.qty*it.price,0);
+    const legacyPaid = b.paymentStatus==='paid';
+    const rows = items.map(it=>{
+      const paid = isIn ? '' : ((it.paid===undefined ? legacyPaid : !!it.paid) ? '<span class="badge badge-good">Pagado</span>' : '<span class="badge badge-warning">Pendiente</span>');
+      const p = getProduct(it.productId);
+      return `<tr${hl(it)}><td>${esc(p&&p.sku?p.sku:'')}</td><td>${esc(it.name||(p?p.name:''))}</td><td class="num">${it.qty}</td><td class="num">${fmtMoney(it.price)}</td><td class="num">${fmtMoney(it.qty*it.price)}</td>${isIn?'':`<td>${paid}</td>`}</tr>`;
+    }).join('');
+    const paidAmt = isIn ? 0 : items.reduce((s,it)=>s+((it.paid===undefined?legacyPaid:!!it.paid)?it.qty*it.price:0),0);
+    title = (isIn?'Entrada':'Salida')+' · '+(b.name||'(sin nombre)');
+    body = `
+      <div style="display:flex;justify-content:space-between;margin-bottom:14px;gap:12px;flex-wrap:wrap;">
+        <div><strong>${esc(DB.company.name)}</strong><br><span style="font-size:12px;color:var(--ink-2);">${esc(DB.company.taxId||'')}</span></div>
+        <div style="text-align:right;"><strong>${esc(b.name||'(sin nombre)')}</strong><br><span style="font-size:12px;color:var(--ink-2);">${fmtDate(b.date)}</span></div>
+      </div>
+      <div style="margin-bottom:12px;font-size:13px;">${movementTypeBadge(b.type)} <span class="badge badge-muted">${b.status==='confirmed'?'Confirmado':'Borrador'}</span>${b.reason?` · <span class="sub">Motivo:</span> ${esc(b.reason)}`:''}</div>
+      ${partyBlock(isIn?'Proveedor':'Cliente', party)}
+      <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;"><table style="margin:0;"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Importe</th>${isIn?'':'<th>Pago</th>'}</tr></thead><tbody>${rows||'<tr><td colspan="6" class="empty">Sin líneas</td></tr>'}</tbody></table></div>
+      <div class="inv-totals" style="margin-top:14px;">
+        <div><span>Unidades</span><span>${items.reduce((s,it)=>s+it.qty,0)}</span></div>
+        ${isIn?'':`<div><span>Cobrado</span><span>${fmtMoney(paidAmt)}</span></div><div><span>Pendiente de cobro</span><span>${fmtMoney(total-paidAmt)}</span></div>`}
+        <div class="total"><span>Total</span><span>${fmtMoney(total)}</span></div>
+      </div>
+      ${b.notes?`<div style="margin-top:14px;font-size:12px;color:var(--ink-2);"><strong>Notas:</strong> ${esc(b.notes)}</div>`:''}
+      ${focusProductId?'<div class="sub no-print" style="margin-top:10px;font-size:11.5px;">La línea resaltada es el producto del historial que estabas mirando.</div>':''}`;
+  } else if(source==='invoice'){
+    const inv = DB.invoices.find(x=>x.id===docId);
+    if(!inv){ toast('No se encuentra el documento (puede haberse eliminado)'); return; }
+    const cl = getClient(inv.clientId), t = invoiceTotals(inv);
+    const rows = inv.items.map(it=>`<tr${hl(it)}><td>${esc(it.name)}</td><td class="num">${it.qty}</td><td class="num">${fmtMoney(it.price)}</td><td class="num">${fmtMoney(it.qty*it.price)}</td></tr>`).join('');
+    title = 'Factura '+inv.number;
+    body = `
+      <div style="display:flex;justify-content:space-between;margin-bottom:14px;">
+        <div><strong>${esc(DB.company.name)}</strong><br><span style="font-size:12px;color:var(--ink-2);">${esc(DB.company.taxId||'')}</span></div>
+        <div style="text-align:right;"><strong>${esc(inv.number)}</strong><br><span style="font-size:12px;color:var(--ink-2);">${fmtDate(inv.date)}</span></div>
+      </div>
+      ${partyBlock('Cliente', cl)}
+      <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;"><table style="margin:0;"><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Importe</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="inv-totals" style="margin-top:14px;">
+        <div><span>Subtotal</span><span>${fmtMoney(t.subtotal)}</span></div>
+        <div><span>IVA (${DB.company.ivaRate}%)</span><span>${fmtMoney(t.tax)}</span></div>
+        <div class="total"><span>Total</span><span>${fmtMoney(t.total)}</span></div>
+      </div>
+      ${inv.notes?`<div style="margin-top:14px;font-size:12px;color:var(--ink-2);"><strong>Notas:</strong> ${esc(inv.notes)}</div>`:''}
+      <div style="margin-top:10px;">${statusBadge(inv.status)}</div>`;
+  } else {
+    const o = DB.orders.find(x=>x.id===docId);
+    if(!o){ toast('No se encuentra el documento (puede haberse eliminado)'); return; }
+    const cl = o.clientId ? getClient(o.clientId) : null;
+    const total = (o.items||[]).reduce((s,it)=>s+it.qty*it.price,0);
+    const rows = (o.items||[]).map(it=>`<tr${hl(it)}><td>${esc(it.name)}</td><td class="num">${it.qty}</td><td class="num">${fmtMoney(it.price)}</td><td class="num">${fmtMoney(it.qty*it.price)}</td></tr>`).join('');
+    title = 'Pedido · '+(o.name||'(sin nombre)');
+    body = `
+      <div style="display:flex;justify-content:space-between;margin-bottom:14px;">
+        <div><strong>${esc(DB.company.name)}</strong></div>
+        <div style="text-align:right;"><strong>${esc(o.name||'(sin nombre)')}</strong><br><span style="font-size:12px;color:var(--ink-2);">${fmtDate(o.date)}</span></div>
+      </div>
+      <div style="margin-bottom:12px;font-size:13px;"><span class="badge ${o.status==='served'?'badge-good':'badge-warning'}">${o.status==='served'?'Servido':'Pendiente'}</span> <span class="sub">Los pedidos no mueven stock.</span></div>
+      ${partyBlock('Cliente', cl)}
+      <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;"><table style="margin:0;"><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Importe</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="inv-totals" style="margin-top:14px;"><div class="total"><span>Total</span><span>${fmtMoney(total)}</span></div></div>
+      ${o.notes?`<div style="margin-top:14px;font-size:12px;color:var(--ink-2);"><strong>Notas:</strong> ${esc(o.notes)}</div>`:''}`;
+  }
+  openModal(title, body + `
+    <div class="modal-actions no-print">
+      <button class="btn btn-secondary" id="hd_back">Volver al historial</button>
+      <button class="btn btn-secondary" id="hd_print">Imprimir / PDF</button>
+      <button class="btn btn-primary" id="hd_close">Cerrar</button>
+    </div>`, ()=>{
+    document.getElementById('modal').style.maxWidth = '820px';
+    document.getElementById('hd_back').addEventListener('click', back);
+    document.getElementById('hd_print').addEventListener('click', ()=>window.print());
+    document.getElementById('hd_close').addEventListener('click', closeModal);
+  });
 }
 function openHistoryModal(preset){
   if(preset && preset.__hist) HIST = preset;
@@ -2844,6 +2936,11 @@ function openHistoryModal(preset){
       q('h_search').addEventListener('input', e=>{ h.search = e.target.value; refresh(); });
       q('h_type').addEventListener('change', e=>{ h.type = e.target.value; refresh(); });
     }
+    q('h_dynamic').addEventListener('click', e=>{
+      const tr = e.target.closest('tr.hist-row');
+      if(!tr || !tr.dataset.docId) return;
+      openHistDocument(h, tr.dataset.docSrc, tr.dataset.docId, tr.dataset.docProd);
+    });
     q('h_excel').addEventListener('click', ()=>histExcel(h));
     q('h_pdf').addEventListener('click', ()=>histPdf(h));
     q('h_close').addEventListener('click', closeModal);
