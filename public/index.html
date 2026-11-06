@@ -193,7 +193,16 @@
     #sidebar, #topbar, .no-print{display:none !important;}
     #content{padding:0;}
     body{background:#fff;}
+    /* Si hay una ventana abierta (vista previa de PDF), imprimir solo su contenido */
+    body:has(#modal-overlay.open) #shell{display:none !important;}
+    #modal-overlay.open{position:static !important;display:block !important;padding:0 !important;overflow:visible !important;background:none !important;}
+    #modal-overlay.open #modal{max-width:none !important;width:100% !important;padding:0 !important;box-shadow:none !important;border-radius:0 !important;}
+    #modal-overlay.open .modal-close-x{display:none !important;}
   }
+  .type-select{padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;font-family:inherit;background:#fff;color:var(--ink);cursor:pointer;max-width:220px;}
+  .type-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+  .type-chip{all:unset;cursor:pointer;padding:3px 10px;border-radius:99px;font-size:12px;background:#eeeeeb;color:var(--ink-2);}
+  .type-chip:hover{background:#e2e2de;}
   .print-only{display:none;}
   @media print{ .print-only{display:block;} }
 </style>
@@ -251,7 +260,7 @@ let DB = {
 };
 
 let state = { view:'dashboard', search:'', editingInvoiceId:null, dismissedBanner:false, stats:{ dateFrom:'', dateTo:'', category:'', productId:'', brand:'', priceMin:'', priceMax:'' },
-  productsSort:{ field:null, dir:null }, stockValueFilter:null, openDropdown:null };
+  productsSort:{ field:null, dir:null }, stockValueFilter:null, openDropdown:null, productsType:'', movType:'' };
 
 /* ===================== HELPERS ===================== */
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -518,6 +527,7 @@ function renderNav(){
 // Un clic fuera del cuadro (en el fondo oscuro) ya NO cierra la ventana, para evitar que se
 // pierda trabajo sin guardar por un clic accidental mientras se está rellenando un formulario.
 function openModal(title, bodyHtml, onMount){
+  document.getElementById('modal').style.maxWidth = '';
   document.getElementById('modal').scrollTop = 0;
   document.getElementById('modalBody').innerHTML = `<h2>${esc(title)}</h2>${bodyHtml}`;
   document.getElementById('modal-overlay').classList.add('open');
@@ -892,7 +902,8 @@ function renderStatistics(){
 /* ===================== STOCK ===================== */
 /* ===================== PRODUCTS ===================== */
 function filteredSortedProducts(){
-  let list = DB.products.filter(p=> matchesSearch(p.name+' '+p.sku+' '+(p.ean||'')+' '+p.category+' '+(p.brand||'')+' '+(p.talla||'')+' '+(p.color||''), state.search));
+  let list = DB.products.filter(p=> matchesSearch(p.name+' '+p.sku+' '+(p.ean||'')+' '+p.category+' '+(p.brand||'')+' '+(p.talla||'')+' '+(p.color||'')+' '+productTypeOf(p), state.search));
+  if(state.productsType) list = list.filter(p=>typeMatches(p, state.productsType));
   if(state.stockValueFilter!==null) list = list.filter(p=>state.stockValueFilter.includes(p.stock));
   list = applyProductSort(list, state.productsSort);
   return list;
@@ -916,6 +927,7 @@ function renderProducts(){
       <td>${esc(p.ean||'—')}</td>
       <td>${esc(p.name)}</td>
       <td>${esc(p.category)}</td>
+      <td>${esc(productTypeOf(p)||'—')}</td>
       <td>${esc(p.brand||'—')}</td>
       <td class="num">${p.stock} ${esc(p.unit)}</td>
       <td class="num">${fmtMoney(p.cost)}</td>
@@ -926,16 +938,30 @@ function renderProducts(){
       <td><div class="row-actions">
         <button class="icon-btn" data-quick-in="${p.id}" title="Registrar entrada">+ Entrada</button>
         <button class="icon-btn" data-quick-out="${p.id}" title="Registrar salida">− Salida</button>
+        <button class="icon-btn" data-history-product="${p.id}" title="Ver historial de movimientos">Historial</button>
         <button class="icon-btn" data-edit-product="${p.id}">Editar</button>
         <button class="icon-btn" data-del-product="${p.id}">Eliminar</button>
       </div></td>
     </tr>`;
-  }).join('') : `<tr><td colspan="13" class="empty">Sin artículos que coincidan con la búsqueda o el filtro</td></tr>`;
+  }).join('') : `<tr><td colspan="14" class="empty">Sin artículos que coincidan con la búsqueda o el filtro</td></tr>`;
 
+  const sumUnits = list.reduce((a,p)=>a+(Number(p.stock)||0),0);
+  const sumCost = list.reduce((a,p)=>a+(Number(p.stock)||0)*(Number(p.cost)||0),0);
+  const sumRetail = list.reduce((a,p)=>a+(Number(p.stock)||0)*(Number(p.price)||0),0);
+  const filtering = !!(state.search.trim() || state.productsType || state.stockValueFilter!==null);
   return `
+  <div class="cards">
+    <div class="card"><div class="label">Productos${filtering?' (con filtros)':''}</div><div class="value">${list.length}</div></div>
+    <div class="card"><div class="label">Unidades en stock</div><div class="value">${sumUnits}</div></div>
+    <div class="card"><div class="label">Valor del stock a coste</div><div class="value">${fmtMoney(sumCost)}</div></div>
+    <div class="card"><div class="label">Valor a precio minorista</div><div class="value">${fmtMoney(sumRetail)}</div></div>
+  </div>
   <div class="toolbar">
-    <input class="search" id="searchInput" placeholder="Buscar por nombre, código, EAN, marca o categoría…" value="${esc(state.search)}">
+    <input class="search" id="searchInput" placeholder="Buscar por nombre, código, EAN, marca, categoría o tipo…" value="${esc(state.search)}">
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      ${typeFilterSelectHtml('typeFilterProducts', state.productsType)}
+      <button class="btn btn-secondary" id="bulkTypeBtn" title="Asignar un tipo a varios productos a la vez">Asignar tipo…</button>
+      <button class="btn btn-secondary" id="miniBtn" title="Crear artículos Minitalla a partir de los probadores">Crear minitallas…</button>
       <button class="btn btn-secondary" id="importProductsBtn">Importar artículos (.txt)</button>
       <button class="btn btn-secondary" id="importPhotosBtn">Importar fotos</button>
       <button class="btn btn-secondary" id="importMarketPriceBtn">Importar valor de mercado</button>
@@ -949,13 +975,13 @@ function renderProducts(){
   </div>
   <div class="panel">
     <table>
-      <thead><tr><th></th><th>Código</th><th>EAN</th><th>Nombre</th><th>Categoría</th><th>Marca</th><th class="num">Stock</th><th class="num">Coste</th><th class="num">P. minorista</th><th class="num">P. mayorista</th><th class="num">V. mercado</th><th>Estado</th><th></th></tr></thead>
+      <thead><tr><th></th><th>Código</th><th>EAN</th><th>Nombre</th><th>Categoría</th><th>Tipo</th><th>Marca</th><th class="num">Stock</th><th class="num">Coste</th><th class="num">P. minorista</th><th class="num">P. mayorista</th><th class="num">V. mercado</th><th>Estado</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>`;
 }
 function productForm(p){
-  p = p || { sku:'', ean:'', name:'', category:'', brand:'', price:0, priceWholesale:0, cost:0, marketPrice:0, stock:0, minStock:0, unit:'ud', talla:'', color:'', image:'' };
+  p = p || { sku:'', ean:'', name:'', category:'', brand:'', type:'', price:0, priceWholesale:0, cost:0, marketPrice:0, stock:0, minStock:0, unit:'ud', talla:'', color:'', image:'' };
   return `
   <div class="field">
     <label>Foto del artículo</label>
@@ -978,6 +1004,10 @@ function productForm(p){
   <div class="field-row">
     <div class="field"><label>Categoría</label><input id="f_category" value="${esc(p.category)}"></div>
     <div class="field"><label>Marca</label><input id="f_brand" value="${esc(p.brand||'')}" placeholder="Ej. Dior, Chanel, Acqua di Parma…"></div>
+  </div>
+  <div class="field"><label>Tipo de producto</label>
+    <input id="f_type" list="f_typeList" value="${esc(productTypeOf(p))}" placeholder="Ej. Probador, Minitalla, Miniatura, Frasco completo" autocomplete="off">
+    ${typeDatalistHtml('f_typeList')}${typeChipsHtml()}
   </div>
   <div class="field"><label>Unidad</label><input id="f_unit" value="${esc(p.unit)}"></div>
   <div class="field-row">
@@ -1006,6 +1036,7 @@ function openProductModal(id){
   const existing = id ? getProduct(id) : null;
   openModal(existing?'Editar producto':'Nuevo producto', productForm(existing));
   document.getElementById('cancelBtn').addEventListener('click', closeModal);
+  document.querySelectorAll('[data-type-chip]').forEach(ch=>ch.addEventListener('click', ()=>{ document.getElementById('f_type').value = ch.dataset.typeChip; }));
 
   const pickBtn = document.getElementById('f_image_pick');
   const removeBtn = document.getElementById('f_image_remove');
@@ -1041,6 +1072,7 @@ function openProductModal(id){
       name: document.getElementById('f_name').value.trim(),
       category: document.getElementById('f_category').value.trim(),
       brand: document.getElementById('f_brand').value.trim(),
+      type: canonicalType(document.getElementById('f_type').value),
       cost: parseFloat(document.getElementById('f_cost').value)||0,
       price: parseFloat(document.getElementById('f_price').value)||0,
       priceWholesale: parseFloat(document.getElementById('f_priceWholesale').value)||0,
@@ -1322,10 +1354,7 @@ function movementStatusBadge(status){
 }
 function renderMovements(){
   const q = state.search.toLowerCase();
-  const list = [...DB.movementBatches].sort((a,b)=>b.date.localeCompare(a.date)).filter(b=>{
-    const party = b.type==='in' ? (b.supplierId?getSupplier(b.supplierId):null) : (b.clientId?getClient(b.clientId):null);
-    return matchesSearch(b.name+' '+b.reason+' '+(party?party.name:''), state.search);
-  });
+  const list = filteredBatches();
   const totalPending = DB.movementBatches.filter(b=>b.type==='out' && b.status==='confirmed').reduce((s,b)=>s+batchPendingTotal(b),0);
   const rows = list.length ? list.map(b=>{
     const party = b.type==='in' ? (b.supplierId?getSupplier(b.supplierId):null) : (b.clientId?getClient(b.clientId):null);
@@ -1354,6 +1383,8 @@ function renderMovements(){
   <div class="toolbar">
     <input class="search" id="searchInput" placeholder="Buscar por nombre, motivo, proveedor o cliente…" value="${esc(state.search)}">
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      ${typeFilterSelectHtml('typeFilterMovements', state.movType)}
+      <button class="btn btn-secondary" id="generalHistoryBtn" title="Historial de todos los productos con filtros de fechas, proveedor y cliente">Historial general</button>
       <button class="btn btn-secondary" id="addMovementInBtn">+ Nueva entrada</button>
       <button class="btn btn-secondary" id="addMovementOutBtn">− Nueva salida</button>
       <button class="btn btn-secondary" id="exportExcelBtn">Exportar Excel</button>
@@ -2390,6 +2421,588 @@ function attachUsersListeners(){
   });
 }
 
+/* ===================== TIPO DE PRODUCTO ===================== */
+function normTxt(s){ return String(s==null?'':s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim(); }
+function productTypeOf(p){ return String((p && p.type) || '').trim(); }
+// Tipos ya usados (agrupa variantes de mayúsculas/acentos y se queda con la escritura más usada)
+function existingTypes(){
+  const groups = {};
+  DB.products.forEach(p=>{
+    const t = productTypeOf(p); if(!t) return;
+    const k = normTxt(t);
+    if(!groups[k]) groups[k] = {};
+    groups[k][t] = (groups[k][t]||0) + 1;
+  });
+  return Object.values(groups).map(spell=>{
+    const names = Object.keys(spell).sort((a,b)=>spell[b]-spell[a] || a.localeCompare(b));
+    return { name:names[0], count:Object.values(spell).reduce((s,n)=>s+n,0) };
+  }).sort((a,b)=>a.name.localeCompare(b.name,'es',{sensitivity:'base'}));
+}
+// Si lo escrito coincide con un tipo existente (sin importar mayúsculas/acentos), usa la escritura existente
+function canonicalType(input){
+  const t = String(input||'').trim().replace(/\s+/g,' ');
+  if(!t) return '';
+  const k = normTxt(t);
+  const found = existingTypes().find(x=>normTxt(x.name)===k);
+  return found ? found.name : t;
+}
+function typeMatches(p, filter){
+  if(!filter) return true;
+  const t = productTypeOf(p);
+  if(filter==='__none__') return !t;
+  return normTxt(t)===normTxt(filter);
+}
+function typeFilterSelectHtml(id, current){
+  const types = existingTypes();
+  const none = DB.products.filter(p=>!productTypeOf(p)).length;
+  return `<select class="type-select" id="${id}" title="Filtrar por tipo de producto">
+    <option value="">Todos los tipos</option>
+    ${types.map(t=>`<option value="${esc(t.name)}" ${current && normTxt(current)===normTxt(t.name)?'selected':''}>${esc(t.name)} (${t.count})</option>`).join('')}
+    <option value="__none__" ${current==='__none__'?'selected':''}>Sin tipo (${none})</option>
+  </select>`;
+}
+function typeDatalistHtml(id){
+  return `<datalist id="${id}">${existingTypes().map(t=>`<option value="${esc(t.name)}"></option>`).join('')}</datalist>`;
+}
+function typeChipsHtml(){
+  const types = existingTypes();
+  if(!types.length) return '';
+  return `<div class="type-chips">${types.map(t=>`<button type="button" class="type-chip" data-type-chip="${esc(t.name)}">${esc(t.name)}</button>`).join('')}</div>`;
+}
+function filteredBatches(){
+  return [...DB.movementBatches].sort((a,b)=>b.date.localeCompare(a.date)).filter(b=>{
+    const party = b.type==='in' ? (b.supplierId?getSupplier(b.supplierId):null) : (b.clientId?getClient(b.clientId):null);
+    if(!matchesSearch(b.name+' '+b.reason+' '+(party?party.name:''), state.search)) return false;
+    if(state.movType){
+      return (b.items||[]).some(it=>{ const p = getProduct(it.productId); return p ? typeMatches(p, state.movType) : state.movType==='__none__'; });
+    }
+    return true;
+  });
+}
+
+/* ---- Asignar tipo a varios productos a la vez ---- */
+function openBulkTypeModal(){
+  const visibleIds = filteredSortedProducts().map(p=>p.id);
+  const bulk = { mode:'visible', text:'', onlyUntyped:true, excluded:new Set() };
+  const matched = ()=>{
+    let list;
+    if(bulk.mode==='visible'){ const set = new Set(visibleIds); list = DB.products.filter(p=>set.has(p.id)); }
+    else { list = bulk.text.trim() ? DB.products.filter(p=>matchesSearch(p.name, bulk.text)) : []; }
+    if(bulk.onlyUntyped) list = list.filter(p=>!productTypeOf(p));
+    return list;
+  };
+  const body = `
+    <p style="font-size:12.5px;color:var(--ink-2);margin-top:0;">Elige qué productos quieres clasificar y el tipo que les quieres poner. Solo se cambia el campo "Tipo": nada más.</p>
+    <div class="field"><label>Tipo a asignar (déjalo vacío para quitar el tipo)</label>
+      <input id="bt_type" list="bt_typeList" placeholder="Ej. Probador, Minitalla, Miniatura, Frasco completo" autocomplete="off">
+      ${typeDatalistHtml('bt_typeList')}
+    </div>
+    <div class="field"><label>¿A qué productos?</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-bottom:6px;"><input type="radio" name="bt_mode" value="visible" checked style="width:auto;"> Los que se ven ahora en el listado (<span id="bt_visibleCount">${visibleIds.length}</span>) según la búsqueda y los filtros</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:400;"><input type="radio" name="bt_mode" value="text" style="width:auto;"> Los que tienen este texto en el nombre:</label>
+      <input id="bt_text" placeholder="Ej. PROBADOR (varias palabras: deben estar todas)" style="margin-top:6px;" disabled>
+    </div>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:400;font-size:13px;margin-bottom:10px;"><input type="checkbox" id="bt_onlyUntyped" checked style="width:auto;"> Solo los que todavía no tienen tipo (no pisa los ya clasificados)</label>
+    <div id="bt_preview"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="bt_cancel">Cancelar</button>
+      <button class="btn btn-primary" id="bt_apply">Asignar</button>
+    </div>`;
+  openModal('Asignar tipo a varios productos', body, ()=>{
+    const q = id=>document.getElementById(id);
+    const renderPreview = ()=>{
+      const list = matched();
+      const chosen = list.filter(p=>!bulk.excluded.has(p.id));
+      const LIMIT = 150;
+      q('bt_preview').innerHTML = `
+        <div style="font-size:12.5px;margin-bottom:6px;"><strong>${chosen.length}</strong> de ${list.length} productos se van a cambiar.
+          ${list.length?`<a href="#" id="bt_all" style="margin-left:8px;">Marcar todos</a> · <a href="#" id="bt_none">Desmarcar todos</a>`:''}</div>
+        <div style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:4px 8px;">
+          ${list.slice(0,LIMIT).map(p=>`<label style="display:flex;gap:8px;align-items:center;font-weight:400;font-size:12.5px;padding:3px 0;"><input type="checkbox" data-bt-id="${p.id}" ${bulk.excluded.has(p.id)?'':'checked'} style="width:auto;"> <span>${esc(p.name)}${productTypeOf(p)?` <span class="sub">(${esc(productTypeOf(p))})</span>`:''}</span></label>`).join('') || '<div class="empty" style="padding:14px;">Ningún producto coincide</div>'}
+          ${list.length>LIMIT?`<div class="sub" style="padding:6px 0;">Se muestran los primeros ${LIMIT}. Los demás también se cambian (salvo los que desmarques).</div>`:''}
+        </div>`;
+      q('bt_preview').querySelectorAll('[data-bt-id]').forEach(cb=>cb.addEventListener('change', ()=>{
+        if(cb.checked) bulk.excluded.delete(cb.dataset.btId); else bulk.excluded.add(cb.dataset.btId);
+        renderPreview();
+      }));
+      const a = q('bt_all'); if(a) a.addEventListener('click', e=>{ e.preventDefault(); bulk.excluded.clear(); renderPreview(); });
+      const n = q('bt_none'); if(n) n.addEventListener('click', e=>{ e.preventDefault(); list.forEach(p=>bulk.excluded.add(p.id)); renderPreview(); });
+      const t = canonicalType(q('bt_type').value);
+      q('bt_apply').textContent = chosen.length ? (t ? `Asignar "${t}" a ${chosen.length}` : `Quitar el tipo a ${chosen.length}`) : 'Asignar';
+    };
+    document.querySelectorAll('[name=bt_mode]').forEach(r=>r.addEventListener('change', ()=>{
+      bulk.mode = r.value; q('bt_text').disabled = bulk.mode!=='text'; bulk.excluded.clear(); renderPreview();
+    }));
+    q('bt_text').addEventListener('input', e=>{ bulk.text = e.target.value; bulk.excluded.clear(); renderPreview(); });
+    q('bt_onlyUntyped').addEventListener('change', e=>{ bulk.onlyUntyped = e.target.checked; bulk.excluded.clear(); renderPreview(); });
+    q('bt_type').addEventListener('input', renderPreview);
+    q('bt_cancel').addEventListener('click', closeModal);
+    q('bt_apply').addEventListener('click', ()=>{
+      const chosen = matched().filter(p=>!bulk.excluded.has(p.id));
+      if(!chosen.length){ toast('No hay productos seleccionados'); return; }
+      const t = canonicalType(q('bt_type').value);
+      const msg = t ? `¿Asignar el tipo "${t}" a ${chosen.length} productos?` : `¿Quitar el tipo a ${chosen.length} productos?`;
+      if(!confirm(msg)) return;
+      chosen.forEach(p=>{ p.type = t; });
+      closeModal(); render();
+      toast(t ? `Tipo "${t}" asignado a ${chosen.length} productos` : `Tipo quitado a ${chosen.length} productos`);
+    });
+    renderPreview();
+  });
+}
+
+/* ===================== HISTORIAL DE MOVIMIENTOS ===================== */
+let HIST = null;
+function localISO(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function histPeriod(key){
+  const now = new Date(); const y = now.getFullYear(), m = now.getMonth();
+  if(key==='month') return { from:localISO(new Date(y,m,1)), to:localISO(new Date(y,m+1,0)) };
+  if(key==='3m'){ const d = new Date(y,m-3,now.getDate()); return { from:localISO(d), to:localISO(now) }; }
+  if(key==='year') return { from:localISO(new Date(y,0,1)), to:localISO(new Date(y,11,31)) };
+  return { from:'', to:'' };
+}
+function histActivePeriod(h){
+  for(const k of ['month','3m','year','all']){ const p = histPeriod(k); if(p.from===h.from && p.to===h.to) return k; }
+  return '';
+}
+// Todas las líneas de movimiento: entradas/salidas confirmadas, facturas emitidas y (aparte) pedidos
+function historyLines(){
+  const lines = [];
+  DB.movementBatches.forEach(b=>{
+    if(b.status!=='confirmed') return;
+    const party = b.type==='in' ? (b.supplierId?getSupplier(b.supplierId):null) : (b.clientId?getClient(b.clientId):null);
+    (b.items||[]).forEach(it=>{
+      const paid = b.type==='out' ? (it.paid===undefined ? b.paymentStatus==='paid' : !!it.paid) : null;
+      lines.push({ date:b.date, kind:b.type, source:'batch', doc:b.name, docNote:b.reason||'', party:party?party.name:'', productId:it.productId, name:it.name, qty:it.qty, price:it.price, paid });
+    });
+  });
+  DB.invoices.forEach(inv=>{
+    if(inv.status==='draft') return;
+    const cl = getClient(inv.clientId);
+    (inv.items||[]).forEach(it=>{
+      lines.push({ date:inv.date, kind:'out', source:'invoice', doc:inv.number, docNote:'Factura', party:cl?cl.name:'', productId:it.productId, name:it.name, qty:it.qty, price:it.price, paid:inv.status==='paid' });
+    });
+  });
+  DB.orders.forEach(o=>{
+    const cl = o.clientId ? getClient(o.clientId) : null;
+    (o.items||[]).forEach(it=>{
+      lines.push({ date:o.date, kind:'order', source:'order', doc:o.name, docNote:o.status==='served'?'Pedido servido':'Pedido pendiente', party:cl?cl.name:'', productId:it.productId, name:it.name, qty:it.qty, price:it.price, paid:null, served:o.status==='served' });
+    });
+  });
+  return lines;
+}
+function histProductPredicate(h){
+  if(h.productId) return id=>id===h.productId;
+  const noFilter = !h.search.trim() && !h.type;
+  return id=>{
+    const p = getProduct(id);
+    if(!p) return noFilter;
+    if(h.type && !typeMatches(p, h.type)) return false;
+    if(h.search.trim() && !matchesSearch(p.name+' '+p.sku+' '+(p.ean||'')+' '+(p.brand||'')+' '+productTypeOf(p), h.search)) return false;
+    return true;
+  };
+}
+function histCompute(h){
+  const all = historyLines();
+  const prodOK = histProductPredicate(h);
+  const inRange = l => (!h.from || l.date>=h.from) && (!h.to || l.date<=h.to);
+  const partyQ = normTxt(h.party);
+  const rows = all.filter(l=>{
+    if(!prodOK(l.productId) || !inRange(l)) return false;
+    if(l.kind==='in' && !h.showIn) return false;
+    if(l.kind==='out' && !h.showOut) return false;
+    if(l.kind==='order' && !h.showOrders) return false;
+    if(partyQ && !normTxt(l.party).includes(partyQ)) return false;
+    return true;
+  }).sort((a,b)=> b.date.localeCompare(a.date) || String(a.doc).localeCompare(String(b.doc)));
+  const ins = rows.filter(l=>l.kind==='in'), outs = rows.filter(l=>l.kind==='out');
+  const sum = (arr,f)=>arr.reduce((s,l)=>s+f(l),0);
+  const sm = {
+    inQty:sum(ins,l=>l.qty), inAmt:sum(ins,l=>l.qty*l.price),
+    outQty:sum(outs,l=>l.qty), outAmt:sum(outs,l=>l.qty*l.price)
+  };
+  sm.diff = sm.outAmt - sm.inAmt;
+  // Stock al inicio y al final: se parte del stock actual y se deshacen los movimientos posteriores
+  const prods = h.productId ? [getProduct(h.productId)].filter(Boolean) : DB.products.filter(p=>prodOK(p.id));
+  const prodIds = new Set(prods.map(p=>p.id));
+  const net = l => l.kind==='in' ? l.qty : -l.qty;
+  const stockLines = all.filter(l=>l.kind!=='order' && prodIds.has(l.productId));
+  sm.currentStock = prods.reduce((s,p)=>s+(Number(p.stock)||0),0);
+  const afterTo = h.to ? stockLines.filter(l=>l.date>h.to).reduce((s,l)=>s+net(l),0) : 0;
+  const fromOn = stockLines.filter(l=>!h.from || l.date>=h.from).reduce((s,l)=>s+net(l),0);
+  sm.stockEnd = sm.currentStock - afterTo;
+  sm.stockStart = sm.currentStock - fromOn;
+  sm.productsWithMoves = new Set(rows.filter(l=>l.kind!=='order').map(l=>l.productId)).size;
+  sm.docs = new Set(rows.filter(l=>l.kind!=='order').map(l=>l.source+'|'+l.doc+'|'+l.date)).size;
+  sm.avgBuy = sm.inQty ? sm.inAmt/sm.inQty : null;
+  sm.avgSell = sm.outQty ? sm.outAmt/sm.outQty : null;
+  const lastIn = [...ins].sort((a,b)=>b.date.localeCompare(a.date))[0];
+  const lastOut = [...outs].sort((a,b)=>b.date.localeCompare(a.date))[0];
+  sm.lastIn = lastIn || null; sm.lastOut = lastOut || null;
+  sm.pendingOrders = h.productId ? all.filter(l=>l.kind==='order' && !l.served && l.productId===h.productId).reduce((s,l)=>s+l.qty,0) : null;
+  return { rows, sm, prods };
+}
+function histPriceChanges(h){
+  if(!h.productId) return [];
+  const labels = { price:'Precio minorista', priceWholesale:'Precio mayorista', cost:'Coste', marketPrice:'Valor de mercado' };
+  return DB.priceHistory.filter(e=>e.productId===h.productId && (!h.from || e.date>=h.from) && (!h.to || e.date<=h.to))
+    .sort((a,b)=>b.date.localeCompare(a.date))
+    .map(e=>({ date:e.date, concept:labels[e.field]||e.field, oldValue:e.oldValue, newValue:e.newValue }));
+}
+function histPartyNames(){
+  return [...new Set([...DB.suppliers.map(s=>s.name), ...DB.clients.map(c=>c.name)].filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es',{sensitivity:'base'}));
+}
+function histMoney(n){ return n==null ? '—' : fmtMoney(n); }
+function histTitle(h){
+  const p = h.productId ? getProduct(h.productId) : null;
+  return h.productId ? 'Historial · '+(p?p.name:'producto') : 'Historial general de movimientos';
+}
+function histPeriodLabel(h){
+  if(!h.from && !h.to) return 'Todo el periodo';
+  return (h.from?'Desde '+fmtDate(h.from):'Desde el inicio')+' '+(h.to?'hasta '+fmtDate(h.to):'hasta hoy');
+}
+function histSummaryPairs(h, c){
+  const s = c.sm;
+  const pairs = [
+    ['Entradas (compras)', s.inQty+' uds · '+fmtMoney(s.inAmt)],
+    ['Salidas (ventas)', s.outQty+' uds · '+fmtMoney(s.outAmt)],
+    ['Ventas − compras', fmtMoney(s.diff)],
+    ['Stock al inicio del periodo', s.stockStart+' uds'],
+    ['Stock al final del periodo', s.stockEnd+' uds']
+  ];
+  if(h.productId){
+    pairs.push(['Precio medio de compra', histMoney(s.avgBuy)]);
+    pairs.push(['Precio medio de venta', histMoney(s.avgSell)]);
+    if(s.avgBuy!=null && s.avgSell!=null) pairs.push(['Margen medio por unidad', fmtMoney(s.avgSell-s.avgBuy)+(s.avgBuy>0?' ('+(((s.avgSell-s.avgBuy)/s.avgBuy)*100).toFixed(0)+'%)':'')]);
+    pairs.push(['Última compra', s.lastIn ? fmtDate(s.lastIn.date)+' · '+fmtMoney(s.lastIn.price) : '—']);
+    pairs.push(['Última venta', s.lastOut ? fmtDate(s.lastOut.date)+' · '+fmtMoney(s.lastOut.price) : '—']);
+    pairs.push(['Pedidos pendientes', s.pendingOrders+' uds']);
+  } else {
+    pairs.push(['Productos con movimientos', String(s.productsWithMoves)]);
+    pairs.push(['Documentos', String(s.docs)]);
+  }
+  return pairs;
+}
+function histExportData(h){
+  const c = histCompute(h);
+  const headers = ['Fecha','Movimiento','Documento','Proveedor / Cliente'];
+  if(!h.productId) headers.push('Código','Producto','Tipo de producto');
+  headers.push('Cantidad','Precio','Importe','Pago');
+  const rows = c.rows.map(l=>{
+    const p = getProduct(l.productId);
+    const sign = l.kind==='out' ? -1 : 1;
+    const mov = l.kind==='in' ? 'Entrada' : (l.kind==='out' ? 'Salida' : 'Pedido');
+    const base = [fmtDate(l.date), mov, l.doc+(l.docNote?' ('+l.docNote+')':''), l.party];
+    if(!h.productId) base.push(p?p.sku:'', p?p.name:l.name, p?productTypeOf(p):'');
+    base.push(l.kind==='order' ? l.qty : sign*l.qty, l.price, l.qty*l.price, l.kind==='out' ? (l.paid?'Pagado':'Pendiente') : '');
+    return base;
+  });
+  return { title: h.productId ? 'Historial '+(getProduct(h.productId)?getProduct(h.productId).name:'') : 'Historial general', headers, rows,
+    summary: [['Periodo', histPeriodLabel(h)]].concat(histSummaryPairs(h,c)) };
+}
+function histExcel(h){
+  const d = histExportData(h);
+  if(!d.rows.length){ toast('No hay datos para exportar'); return; }
+  const cell = v=> typeof v==='number' ? `<Cell><Data ss:Type="Number">${v}</Data></Cell>` : `<Cell><Data ss:Type="String">${esc(String(v==null?'':v))}</Data></Cell>`;
+  const sumRows = d.summary.map(([k,v])=>`<Row>${cell(k)}${cell(v)}</Row>`).join('');
+  const xml = `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+<Worksheet ss:Name="Historial"><Table>${sumRows}<Row></Row><Row>${d.headers.map(cell).join('')}</Row>${d.rows.map(r=>`<Row>${r.map(cell).join('')}</Row>`).join('')}</Table></Worksheet>
+</Workbook>`;
+  const safe = d.title.replace(/[^\wÁÉÍÓÚÜÑáéíóúüñ\-]+/g,'_').slice(0,60);
+  downloadBlob(`${safe}-${localISO(new Date())}.xls`, 'application/vnd.ms-excel', xml);
+  toast('Excel exportado');
+}
+function histPdf(h){
+  const d = histExportData(h);
+  if(!d.rows.length){ toast('No hay datos para exportar'); return; }
+  const body = `
+    <div style="display:flex;justify-content:space-between;margin-bottom:12px;">
+      <div><strong>${esc(DB.company.name)}</strong></div>
+      <div style="text-align:right;font-size:12px;color:var(--ink-2);">${esc(d.title)} · ${new Date().toLocaleDateString('es-ES')}</div>
+    </div>
+    <table style="margin-bottom:14px;table-layout:auto;"><tbody>${d.summary.map(([k,v])=>`<tr><td style="font-weight:600;">${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</tbody></table>
+    <table style="table-layout:auto;"><thead><tr>${d.headers.map(x=>`<th>${esc(x)}</th>`).join('')}</tr></thead>
+    <tbody>${d.rows.map(r=>`<tr>${r.map((v,i)=>`<td>${esc(typeof v==='number' ? (d.headers[i]==='Cantidad' ? String(v) : fmtMoney(v)) : String(v==null?'':v))}</td>`).join('')}</tr>`).join('')}</tbody></table>
+    <div class="modal-actions no-print">
+      <button class="btn btn-secondary" id="hp_back">Volver al historial</button>
+      <button class="btn btn-primary" id="hp_print">Imprimir / PDF</button>
+    </div>`;
+  openModal(d.title, body, ()=>{
+    document.getElementById('modal').style.maxWidth = '1100px';
+    document.getElementById('hp_back').addEventListener('click', ()=>openHistoryModal(h));
+    document.getElementById('hp_print').addEventListener('click', ()=>window.print());
+  });
+}
+function histDynamicHtml(h){
+  const c = histCompute(h);
+  const s = c.sm;
+  const card = (label, value, cls)=>`<div class="card" style="padding:12px;"><div class="label">${esc(label)}</div><div class="value ${cls||''}" style="font-size:17px;">${value}</div></div>`;
+  const cards = `<div class="cards" style="margin-bottom:14px;">
+    ${card('Entradas (compras)', s.inQty+' uds<div class="sub" style="font-size:12px;font-weight:500;">'+fmtMoney(s.inAmt)+'</div>')}
+    ${card('Salidas (ventas)', s.outQty+' uds<div class="sub" style="font-size:12px;font-weight:500;">'+fmtMoney(s.outAmt)+'</div>')}
+    ${card('Ventas − compras', fmtMoney(s.diff), s.diff<0?'critical':(s.diff>0?'good':''))}
+    ${card('Stock al inicio', s.stockStart+' uds')}
+    ${card('Stock al final', s.stockEnd+' uds')}
+  </div>`;
+  let extra = '';
+  if(h.productId){
+    const bits = [
+      ['Precio medio de compra', histMoney(s.avgBuy)],
+      ['Precio medio de venta', histMoney(s.avgSell)],
+      ['Margen medio por unidad', (s.avgBuy!=null && s.avgSell!=null) ? fmtMoney(s.avgSell-s.avgBuy)+(s.avgBuy>0?' ('+(((s.avgSell-s.avgBuy)/s.avgBuy)*100).toFixed(0)+'%)':'') : '—'],
+      ['Última compra', s.lastIn ? fmtDate(s.lastIn.date)+' · '+fmtMoney(s.lastIn.price)+(s.lastIn.party?' · '+esc(s.lastIn.party):'') : '—'],
+      ['Última venta', s.lastOut ? fmtDate(s.lastOut.date)+' · '+fmtMoney(s.lastOut.price)+(s.lastOut.party?' · '+esc(s.lastOut.party):'') : '—'],
+      ['Pedidos pendientes', s.pendingOrders+' uds']
+    ];
+    extra = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px 18px;font-size:12.5px;margin-bottom:14px;">${bits.map(([k,v])=>`<div><span class="sub">${k}:</span> <strong>${v}</strong></div>`).join('')}</div>`;
+  } else {
+    extra = `<div style="font-size:12.5px;margin-bottom:14px;"><span class="sub">Productos con movimientos:</span> <strong>${s.productsWithMoves}</strong> · <span class="sub">Documentos:</span> <strong>${s.docs}</strong></div>`;
+  }
+  const LIMIT = 500;
+  const shown = c.rows.slice(0, LIMIT);
+  const trs = shown.map(l=>{
+    const p = getProduct(l.productId);
+    const badge = l.kind==='in' ? '<span class="badge badge-good">Entrada</span>' : (l.kind==='out' ? '<span class="badge badge-critical">Salida</span>' : '<span class="badge badge-blue">Pedido</span>');
+    const qtyTxt = l.kind==='in' ? '+'+l.qty : (l.kind==='out' ? '−'+l.qty : String(l.qty));
+    const pay = l.kind==='out' ? (l.paid ? '<span class="badge badge-good">Pagado</span>' : '<span class="badge badge-warning">Pendiente</span>') : '—';
+    return `<tr>
+      <td>${fmtDate(l.date)}</td><td>${badge}</td>
+      <td>${esc(l.doc)}${l.docNote?`<div class="sub" style="font-size:11px;">${esc(l.docNote)}</div>`:''}</td>
+      <td>${esc(l.party||'—')}</td>
+      ${h.productId?'':`<td>${esc(p?p.sku:'')}</td><td>${esc(p?p.name:l.name)}${p&&productTypeOf(p)?`<div class="sub" style="font-size:11px;">${esc(productTypeOf(p))}</div>`:''}</td>`}
+      <td class="num">${qtyTxt}</td><td class="num">${fmtMoney(l.price)}</td><td class="num">${fmtMoney(l.qty*l.price)}</td><td>${pay}</td>
+    </tr>`;
+  }).join('');
+  const head = `<tr><th>Fecha</th><th>Movimiento</th><th>Documento</th><th>Proveedor / Cliente</th>${h.productId?'':'<th>Código</th><th>Producto</th>'}<th class="num">Cant.</th><th class="num">Precio</th><th class="num">Importe</th><th>Pago</th></tr>`;
+  const cols = h.productId ? 8 : 10;
+  const table = `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;">
+    <table style="margin:0;"><thead>${head}</thead><tbody>${trs || `<tr><td colspan="${cols}" class="empty">No hay movimientos con estos filtros</td></tr>`}</tbody></table></div>
+    <div class="sub" style="margin-top:6px;font-size:11.5px;">${c.rows.length} movimientos${c.rows.length>LIMIT?` (se muestran los ${LIMIT} más recientes; al exportar salen todos)`:''}. Solo cuentan entradas y salidas confirmadas y facturas emitidas. El stock inicial y final se calcula con el stock actual deshaciendo los movimientos posteriores; no depende de los filtros de movimiento ni de proveedor/cliente.</div>`;
+  let prices = '';
+  if(h.productId){
+    const ch = histPriceChanges(h);
+    prices = `<details style="margin-top:14px;"><summary style="cursor:pointer;font-size:13px;font-weight:600;">Historial de precios (${ch.length})</summary>
+      <div style="overflow-x:auto;margin-top:8px;border:1px solid var(--border);border-radius:8px;"><table style="margin:0;"><thead><tr><th>Fecha</th><th>Concepto</th><th class="num">Antes</th><th class="num">Después</th></tr></thead>
+      <tbody>${ch.map(e=>`<tr><td>${fmtDate(e.date)}</td><td>${esc(e.concept)}</td><td class="num">${e.oldValue==null?'alta':fmtMoney(e.oldValue)}</td><td class="num">${fmtMoney(e.newValue)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Sin cambios de precio en este periodo</td></tr>'}</tbody></table></div></details>`;
+  }
+  return cards + extra + table + prices;
+}
+function openHistoryModal(preset){
+  if(preset && preset.__hist) HIST = preset;
+  else {
+    const all = histPeriod('all');
+    HIST = { __hist:true, productId:(preset&&preset.productId)||null, from:all.from, to:all.to, showIn:true, showOut:true, showOrders:false, party:'', search:'', type:'' };
+  }
+  const h = HIST;
+  const p = h.productId ? getProduct(h.productId) : null;
+  if(h.productId && !p){ toast('Producto no encontrado'); return; }
+  const sc = (key,label)=>`<button type="button" class="btn ${histActivePeriod(h)===key?'btn-primary':'btn-secondary'} btn-sm" data-hist-period="${key}">${label}</button>`;
+  const body = `
+    ${p?`<div class="sub" style="margin:-8px 0 12px;font-size:12.5px;">Código ${esc(p.sku||'—')}${p.ean?' · EAN '+esc(p.ean):''}${productTypeOf(p)?' · '+esc(productTypeOf(p)):''} · Stock actual: <strong>${p.stock} ${esc(p.unit)}</strong></div>`:''}
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
+      <div class="field" style="margin:0;"><label>Desde</label><input type="date" id="h_from" value="${h.from}"></div>
+      <div class="field" style="margin:0;"><label>Hasta</label><input type="date" id="h_to" value="${h.to}"></div>
+      <div id="h_shortcuts" style="display:flex;gap:6px;flex-wrap:wrap;">${sc('month','Este mes')}${sc('3m','Últimos 3 meses')}${sc('year','Este año')}${sc('all','Todo')}</div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;">
+      <label style="font-size:13px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="h_in" ${h.showIn?'checked':''}> Entradas</label>
+      <label style="font-size:13px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="h_out" ${h.showOut?'checked':''}> Salidas</label>
+      <label style="font-size:13px;display:flex;gap:6px;align-items:center;" title="Los pedidos no mueven stock; se muestran solo como información"><input type="checkbox" id="h_orders" ${h.showOrders?'checked':''}> Pedidos</label>
+      <div class="field" style="margin:0;flex:1;min-width:180px;"><label>Proveedor o cliente</label><input id="h_party" list="h_partyList" placeholder="Escribe un nombre…" value="${esc(h.party)}" autocomplete="off"><datalist id="h_partyList">${histPartyNames().map(n=>`<option value="${esc(n)}"></option>`).join('')}</datalist></div>
+      ${h.productId?'':`<div class="field" style="margin:0;flex:1;min-width:180px;"><label>Producto</label><input id="h_search" placeholder="Nombre, código, EAN, marca…" value="${esc(h.search)}" autocomplete="off"></div>
+      <div class="field" style="margin:0;"><label>Tipo de producto</label>${typeFilterSelectHtml('h_type', h.type)}</div>`}
+    </div>
+    <div id="h_dynamic">${histDynamicHtml(h)}</div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="h_excel">Exportar Excel</button>
+      <button class="btn btn-secondary" id="h_pdf">Exportar PDF</button>
+      <button class="btn btn-primary" id="h_close">Cerrar</button>
+    </div>`;
+  openModal(histTitle(h), body, ()=>{
+    document.getElementById('modal').style.maxWidth = '1100px';
+    const q = id=>document.getElementById(id);
+    const refresh = ()=>{
+      q('h_dynamic').innerHTML = histDynamicHtml(h);
+      q('h_shortcuts').querySelectorAll('[data-hist-period]').forEach(b=>{
+        const on = histActivePeriod(h)===b.dataset.histPeriod;
+        b.className = 'btn btn-sm ' + (on?'btn-primary':'btn-secondary');
+      });
+    };
+    q('h_from').addEventListener('change', e=>{ h.from = e.target.value; refresh(); });
+    q('h_to').addEventListener('change', e=>{ h.to = e.target.value; refresh(); });
+    q('h_shortcuts').querySelectorAll('[data-hist-period]').forEach(b=>b.addEventListener('click', ()=>{
+      const per = histPeriod(b.dataset.histPeriod); h.from = per.from; h.to = per.to;
+      q('h_from').value = h.from; q('h_to').value = h.to; refresh();
+    }));
+    q('h_in').addEventListener('change', e=>{ h.showIn = e.target.checked; refresh(); });
+    q('h_out').addEventListener('change', e=>{ h.showOut = e.target.checked; refresh(); });
+    q('h_orders').addEventListener('change', e=>{ h.showOrders = e.target.checked; refresh(); });
+    q('h_party').addEventListener('input', e=>{ h.party = e.target.value; refresh(); });
+    if(!h.productId){
+      q('h_search').addEventListener('input', e=>{ h.search = e.target.value; refresh(); });
+      q('h_type').addEventListener('change', e=>{ h.type = e.target.value; refresh(); });
+    }
+    q('h_excel').addEventListener('click', ()=>histExcel(h));
+    q('h_pdf').addEventListener('click', ()=>histPdf(h));
+    q('h_close').addEventListener('click', closeModal);
+  });
+}
+
+/* ===================== CREAR MINITALLAS A PARTIR DE PROBADORES ===================== */
+const MINI_NONPERFUME = /\b(GEL|GELES|CREMA|CREAM|LOTION|LOCION|BODY|HAND|SHAMPOO|CHAMPU|SOAP|JABON|DEO|DEODORANT|DESODORANTE|MILK|BATH|SHOWER|OIL|ACEITE|MASK|SERUM|BALM|BALSAMO)\b/i;
+// Convierte el nombre de un probador en una plantilla: PROBADOR -> {W}, tamaño -> {S}, se quita VAPO
+function miniTemplate(name){
+  let n = String(name||'');
+  let hadSize = false;
+  n = n.replace(/(\d)\s*(ML|M)VAPO\b/i, '$1 $2 VAPO');
+  n = n.replace(/(\d+(?:[.,]\d+)?)\s*(?:ML|M)\b/i, ()=>{ hadSize = true; return ' {S} ML '; });
+  n = n.replace(/\$?\s*PROBADOR(?:ES)?\b/i, ' {W} ');
+  n = n.replace(/\bVAPO\b/gi, ' ');
+  if(!hadSize) n = n + ' {S} ML';
+  n = n.replace(/\s+/g,' ').trim();
+  const warnings = [];
+  if(!hadSize) warnings.push('sin tamaño en el nombre');
+  const sz = name.match(/(\d+(?:[.,]\d+)?)\s*ML\b/i);
+  if(sz && parseFloat(sz[1].replace(',','.')) >= 150) warnings.push('tamaño grande ('+sz[1]+' ML): ¿es un perfume?');
+  if(MINI_NONPERFUME.test(name)) warnings.push('no parece un perfume (gel, crema, loción…)');
+  if(/\b\d+(?:[.,]\d+)?\s*(?:OZ|CL|GR?)\b/i.test(name)) warnings.push('tamaño en otra unidad');
+  return { template:n, warnings };
+}
+function miniBuildGroups(){
+  const groups = new Map();
+  DB.products.filter(p=>/probador/i.test(p.name||'')).forEach(p=>{
+    const t = miniTemplate(p.name);
+    const baseKey = normTxt(t.template);
+    let g = groups.get(baseKey);
+    if(!g){ g = { baseKey, template:t.template, members:[], warnings:[] }; groups.set(baseKey, g); }
+    g.members.push(p);
+    t.warnings.forEach(w=>{ if(!g.warnings.includes(w)) g.warnings.push(w); });
+  });
+  return [...groups.values()].map(g=>{
+    const withPhoto = g.members.find(m=>m.image);
+    const withBrand = g.members.find(m=>m.brand);
+    const withCat = g.members.find(m=>m.category);
+    return { ...g, photo: withPhoto ? withPhoto.image : '', brand: withBrand ? withBrand.brand : '', category: withCat ? withCat.category : '' };
+  }).sort((a,b)=>a.template.localeCompare(b.template,'es',{sensitivity:'base'}));
+}
+function miniNameOf(g, opts){
+  const size = String(opts.size||'10').replace(',','.');
+  return g.template.replace('{W}', String(opts.type||'Minitalla').toUpperCase()).replace('{S}', size).replace(/\s+/g,' ').trim();
+}
+function openMiniModal(){
+  const groups = miniBuildGroups();
+  if(!groups.length){ toast('No hay productos con la palabra PROBADOR en el nombre'); return; }
+  const opts = { type:'Minitalla', size:'10' };
+  const selected = new Set(groups.filter(g=>!g.warnings.length).map(g=>g.baseKey));
+  const view = { filter:'', limit:200 };
+  const existingNames = ()=>new Set(DB.products.map(p=>normTxt(p.name)));
+  const body = `
+    <p style="font-size:12.5px;color:var(--ink-2);margin-top:0;">Se crea <strong>un artículo nuevo por cada nombre distinto</strong>: se quita la palabra PROBADOR, se pone el tipo y los mililitros indicados, y los probadores que solo cambian de tamaño se juntan en uno. EDT, EDP, Parfum, etc. se mantienen como artículos distintos. <strong>No se toca ningún probador.</strong> Los nuevos salen con stock 0 y precios en blanco; la foto, la marca y la categoría se copian del probador.</p>
+    <div class="field-row">
+      <div class="field"><label>Tipo / palabra en el nombre</label><input id="mn_type" list="mn_typeList" value="Minitalla" autocomplete="off">${typeDatalistHtml('mn_typeList')}</div>
+      <div class="field"><label>Mililitros</label><input id="mn_size" type="number" step="0.5" min="1" value="10"></div>
+    </div>
+    <div id="mn_summary" style="font-size:13px;margin-bottom:8px;"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+      <input class="search" id="mn_filter" placeholder="Filtrar la lista por nombre…" style="flex:1;min-width:180px;">
+      <button class="btn btn-secondary btn-sm" id="mn_all">Marcar los visibles</button>
+      <button class="btn btn-secondary btn-sm" id="mn_none">Desmarcar los visibles</button>
+    </div>
+    <div id="mn_list" style="max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:4px 10px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="mn_cancel">Cancelar</button>
+      <button class="btn btn-primary" id="mn_apply">Crear</button>
+    </div>`;
+  openModal('Crear minitallas a partir de los probadores', body, ()=>{
+    document.getElementById('modal').style.maxWidth = '900px';
+    const q = id=>document.getElementById(id);
+    const visible = ()=>{
+      const names = existingNames();
+      let list = groups.map(g=>({ g, name:miniNameOf(g, opts) }));
+      list.forEach(x=>{ x.exists = names.has(normTxt(x.name)); });
+      if(view.filter.trim()) list = list.filter(x=>matchesSearch(x.name+' '+x.g.members.map(m=>m.name).join(' '), view.filter));
+      return list;
+    };
+    const refresh = ()=>{
+      const names = existingNames();
+      const all = groups.map(g=>({ g, name:miniNameOf(g, opts), exists:names.has(normTxt(miniNameOf(g, opts))) }));
+      const chosen = all.filter(x=>!x.exists && selected.has(x.g.baseKey));
+      const nExists = all.filter(x=>x.exists).length;
+      const nWarn = all.filter(x=>x.g.warnings.length).length;
+      const nPhoto = chosen.filter(x=>x.g.photo).length;
+      const nProbs = groups.reduce((s,g)=>s+g.members.length,0);
+      q('mn_summary').innerHTML = `De <strong>${nProbs}</strong> probadores salen <strong>${groups.length}</strong> artículos distintos.
+        Marcados para crear: <strong>${chosen.length}</strong> (<strong>${nPhoto}</strong> con foto).
+        ${nExists?` · <span class="sub">${nExists} ya existen y se saltan</span>`:''}
+        ${nWarn?` · <span style="color:#8a5b00;">${nWarn} con aviso (desmarcados por defecto)</span>`:''}`;
+      const vis = visible();
+      const shown = vis.slice(0, view.limit);
+      q('mn_list').innerHTML = shown.map(x=>{
+        const g = x.g;
+        const src = g.members.map(m=>m.name.replace(/\s+/g,' ').trim());
+        return `<label style="display:flex;gap:10px;align-items:flex-start;font-weight:400;padding:7px 0;border-bottom:1px solid var(--border);${x.exists?'opacity:.55;':''}">
+          <input type="checkbox" data-mn="${esc(g.baseKey)}" ${x.exists?'disabled':''} ${(!x.exists && selected.has(g.baseKey))?'checked':''} style="width:auto;margin-top:3px;">
+          <span style="flex:1;min-width:0;">
+            <strong style="font-size:13px;">${esc(x.name)}</strong>
+            ${x.exists?'<span class="badge badge-muted" style="margin-left:6px;">Ya existe</span>':''}
+            ${g.photo?'<span class="badge badge-good" style="margin-left:6px;">con foto</span>':'<span class="badge badge-muted" style="margin-left:6px;">sin foto</span>'}
+            ${g.warnings.map(w=>`<span class="badge badge-warning" style="margin-left:6px;">${esc(w)}</span>`).join('')}
+            <div class="sub" style="font-size:11.5px;margin-top:2px;">Sale de ${g.members.length} probador${g.members.length>1?'es':''}: ${src.slice(0,3).map(esc).join(' · ')}${src.length>3?' · …':''}</div>
+          </span></label>`;
+      }).join('') || '<div class="empty" style="padding:18px;">Ningún artículo coincide con el filtro</div>';
+      if(vis.length>shown.length) q('mn_list').innerHTML += `<div style="padding:10px;text-align:center;"><button class="btn btn-secondary btn-sm" id="mn_more">Mostrar más (${vis.length-shown.length} restantes)</button></div>`;
+      q('mn_list').querySelectorAll('[data-mn]').forEach(cb=>cb.addEventListener('change', ()=>{
+        if(cb.checked) selected.add(cb.dataset.mn); else selected.delete(cb.dataset.mn);
+        refreshSummaryOnly();
+      }));
+      const more = q('mn_more'); if(more) more.addEventListener('click', ()=>{ view.limit += 200; refresh(); });
+      q('mn_apply').textContent = chosen.length ? `Crear ${chosen.length} artículos` : 'Crear';
+    };
+    const refreshSummaryOnly = ()=>{
+      const names = existingNames();
+      const chosen = groups.filter(g=>!names.has(normTxt(miniNameOf(g, opts))) && selected.has(g.baseKey));
+      q('mn_apply').textContent = chosen.length ? `Crear ${chosen.length} artículos` : 'Crear';
+      const s = q('mn_summary').innerHTML;
+      q('mn_summary').innerHTML = s.replace(/Marcados para crear: <strong>\d+<\/strong> \(<strong>\d+<\/strong> con foto\)/, `Marcados para crear: <strong>${chosen.length}</strong> (<strong>${chosen.filter(g=>g.photo).length}</strong> con foto)`);
+    };
+    q('mn_type').addEventListener('input', e=>{ opts.type = e.target.value.trim() || 'Minitalla'; refresh(); });
+    q('mn_size').addEventListener('input', e=>{ opts.size = e.target.value || '10'; refresh(); });
+    q('mn_filter').addEventListener('input', e=>{ view.filter = e.target.value; view.limit = 200; refresh(); });
+    q('mn_all').addEventListener('click', ()=>{ const names = existingNames(); visible().forEach(x=>{ if(!x.exists) selected.add(x.g.baseKey); }); refresh(); });
+    q('mn_none').addEventListener('click', ()=>{ visible().forEach(x=>selected.delete(x.g.baseKey)); refresh(); });
+    q('mn_cancel').addEventListener('click', closeModal);
+    q('mn_apply').addEventListener('click', ()=>{
+      const names = existingNames();
+      const chosen = groups.filter(g=>!names.has(normTxt(miniNameOf(g, opts))) && selected.has(g.baseKey));
+      if(!chosen.length){ toast('No hay artículos marcados para crear'); return; }
+      const typeName = canonicalType(opts.type);
+      if(!confirm(`¿Crear ${chosen.length} artículos nuevos de tipo "${typeName}"?\n\nNo se modifica ningún probador. Los nuevos tendrán stock 0 y precios en blanco.`)) return;
+      const today = new Date().toISOString().slice(0,10);
+      const usedIds = new Set(DB.products.map(p=>p.id));
+      const usedSkus = new Set(DB.products.map(p=>String(p.sku||'').trim()).filter(Boolean));
+      const freeSku = ()=>{ let c; do{ c = nextInternalCode(); }while(usedSkus.has(c)); usedSkus.add(c); return c; };
+      const newId = ()=>{ let id; do{ id = uid('p'); }while(usedIds.has(id)); usedIds.add(id); return id; };
+      let withPhoto = 0;
+      chosen.forEach(g=>{
+        const id = newId();
+        DB.products.push({ id, sku: freeSku(), ean:'', name: miniNameOf(g, opts), category: g.category, brand: g.brand, type: typeName,
+          cost:0, price:0, priceWholesale:0, marketPrice:0, stock:0, minStock:0, unit:'ud', talla:'', color:'', image: g.photo || '' });
+        DB.priceHistory.push({ id: uid('ph'), productId: id, date: today, field:'price', oldValue:null, newValue:0 });
+        if(g.photo) withPhoto++;
+      });
+      state.productsType = ''; state.search = '';
+      closeModal(); render();
+      openModal('Minitallas creadas', `
+        <p style="font-size:13px;">Se han creado <strong>${chosen.length}</strong> artículos nuevos de tipo <strong>${esc(typeName)}</strong> (<strong>${withPhoto}</strong> con foto copiada).</p>
+        <p style="font-size:12.5px;color:var(--ink-2);">Tienen stock 0 y los precios en blanco. Para verlos, en Productos usa el desplegable de tipos y elige "${esc(typeName)}". Los probadores no se han tocado.</p>
+        <div class="modal-actions"><button class="btn btn-primary" id="mn_done">Cerrar</button></div>`, ()=>{ document.getElementById('mn_done').addEventListener('click', closeModal); });
+    });
+    refresh();
+  });
+}
+
 /* ===================== EXPORT / IMPORT ===================== */
 /* ===================== PANEL EXPORT (EXCEL / PDF) ===================== */
 function downloadBlob(filename, mime, content){
@@ -2510,17 +3123,12 @@ function getExportDataForView(){
       }) };
   }
   if(view==='products'){
-    let list = DB.products.filter(p=>matchesSearch(p.name+' '+p.sku+' '+(p.ean||'')+' '+p.category+' '+(p.brand||'')+' '+(p.talla||'')+' '+(p.color||''), state.search));
-    if(state.stockValueFilter!==null) list = list.filter(p=>state.stockValueFilter.includes(p.stock));
-    list = applyProductSort(list, state.productsSort);
-    return { title:'Productos', headers:['Código','EAN','Nombre','Categoría','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'],
-      rows: list.map(p=>[p.sku, p.ean||'', p.name, p.category, p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', stockStatus(p).label]) };
+    const list = filteredSortedProducts();
+    return { title:'Productos', headers:['Código','EAN','Nombre','Categoría','Tipo','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'],
+      rows: list.map(p=>[p.sku, p.ean||'', p.name, p.category, productTypeOf(p), p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', stockStatus(p).label]) };
   }
   if(view==='movements'){
-    const list = [...DB.movementBatches].sort((a,b)=>b.date.localeCompare(a.date)).filter(b=>{
-      const party = b.type==='in' ? (b.supplierId?getSupplier(b.supplierId):null) : (b.clientId?getClient(b.clientId):null);
-      return matchesSearch(b.name+' '+b.reason+' '+(party?party.name:''), state.search);
-    });
+    const list = filteredBatches();
     return { title:'Entradas y Salidas', headers:['Fecha','Nombre','Tipo','Motivo','Proveedor / Cliente','Artículos','Total','Estado','Pago'],
       rows: list.map(b=>{
         const party = b.type==='in' ? (b.supplierId?getSupplier(b.supplierId):null) : (b.clientId?getClient(b.clientId):null);
@@ -2590,7 +3198,7 @@ function xmlEsc(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<
 function exportProductsExcelWithPhotos(){
   const list = filteredSortedProducts();
   if(!list.length){ toast('No hay datos para exportar'); return; }
-  const headers = ['Foto','Código','EAN','Nombre','Categoría','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'];
+  const headers = ['Foto','Código','EAN','Nombre','Categoría','Tipo','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'];
   const ROW_H = 78; // points
   const COL_W = 16; // Foto column width (character units)
   const IMG_PX = 90;
@@ -2609,7 +3217,7 @@ function exportProductsExcelWithPhotos(){
   list.forEach((p, i)=>{
     const excelRow = i + 2; // 1-indexed, header is row 1
     const st = stockStatus(p);
-    const values = ['', p.sku, p.ean||'', p.name, p.category, p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', st.label];
+    const values = ['', p.sku, p.ean||'', p.name, p.category, productTypeOf(p), p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', st.label];
     const cells = values.map((v,ci)=>`<c r="${colLetter(ci)}${excelRow}" t="inlineStr"><is><t>${xmlEsc(String(v))}</t></is></c>`).join('');
     sheetRows += `<row r="${excelRow}" ht="${ROW_H}" customHeight="1">${cells}</row>`;
 
@@ -2733,7 +3341,7 @@ function exportProductsPDFWithPhotos(){
   const list = filteredSortedProducts();
   if(!list.length){ toast('No hay datos para exportar'); return; }
   const stamp = new Date().toLocaleDateString('es-ES');
-  const theadHtml = `<tr><th style="width:56px;">Foto</th><th>Código</th><th>EAN</th><th>Nombre</th><th>Categoría</th><th>Marca</th><th>Stock</th><th>Coste</th><th>P. minorista</th><th>P. mayorista</th><th>V. mercado</th><th>Estado</th></tr>`;
+  const theadHtml = `<tr><th style="width:56px;">Foto</th><th>Código</th><th>EAN</th><th>Nombre</th><th>Categoría</th><th>Tipo</th><th>Marca</th><th>Stock</th><th>Coste</th><th>P. minorista</th><th>P. mayorista</th><th>V. mercado</th><th>Estado</th></tr>`;
   const tbodyHtml = list.map(p=>{
     const st = stockStatus(p);
     const photoCell = p.image ? `<img src="${p.image}" class="thumb" alt="">` : `<div class="thumb thumb-empty"></div>`;
@@ -2743,6 +3351,7 @@ function exportProductsPDFWithPhotos(){
       <td style="vertical-align:middle;">${esc(p.ean||'')}</td>
       <td style="vertical-align:middle;">${esc(p.name)}</td>
       <td style="vertical-align:middle;">${esc(p.category)}</td>
+      <td style="vertical-align:middle;">${esc(productTypeOf(p))}</td>
       <td style="vertical-align:middle;">${esc(p.brand||'')}</td>
       <td style="vertical-align:middle;">${p.stock} ${esc(p.unit)}</td>
       <td style="vertical-align:middle;">${fmtMoney(p.cost)}</td>
@@ -2825,6 +3434,15 @@ function attachViewListeners(){
       restoreCursor(document.getElementById('searchInput'), cursorPos);
     });
   }
+
+  const tfp = document.getElementById('typeFilterProducts');
+  if(tfp) tfp.addEventListener('change', e=>{ state.productsType = e.target.value; render(); });
+  const tfm = document.getElementById('typeFilterMovements');
+  if(tfm) tfm.addEventListener('change', e=>{ state.movType = e.target.value; render(); });
+  const bulkBtn = document.getElementById('bulkTypeBtn'); if(bulkBtn) bulkBtn.addEventListener('click', openBulkTypeModal);
+  const miniBtn = document.getElementById('miniBtn'); if(miniBtn) miniBtn.addEventListener('click', openMiniModal);
+  const ghBtn = document.getElementById('generalHistoryBtn'); if(ghBtn) ghBtn.addEventListener('click', ()=>openHistoryModal());
+  document.querySelectorAll('[data-history-product]').forEach(b=>b.addEventListener('click', ()=>openHistoryModal({ productId:b.dataset.historyProduct })));
 
   const dismiss = document.getElementById('dismissBanner');
   if(dismiss) dismiss.addEventListener('click', ()=>{ state.dismissedBanner = true; render(); });
