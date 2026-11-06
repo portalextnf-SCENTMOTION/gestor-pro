@@ -3004,7 +3004,7 @@ function openMiniModal(){
     <div id="mn_summary" style="font-size:13px;margin-bottom:8px;"></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
       <input class="search" id="mn_filter" placeholder="Filtrar la lista por nombre…" style="flex:1;min-width:180px;">
-      <button class="btn btn-secondary btn-sm" id="mn_all">Marcar los visibles</button>
+      <button class="btn btn-secondary btn-sm" id="mn_all" title="No marca los que tienen aviso (geles, cremas, tamaños raros…); esos se marcan a mano uno a uno">Marcar los visibles (sin avisos)</button>
       <button class="btn btn-secondary btn-sm" id="mn_none">Desmarcar los visibles</button>
     </div>
     <div id="mn_list" style="max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:4px 10px;"></div>
@@ -3067,7 +3067,7 @@ function openMiniModal(){
     q('mn_type').addEventListener('input', e=>{ opts.type = e.target.value.trim() || 'Minitalla'; refresh(); });
     q('mn_size').addEventListener('input', e=>{ opts.size = e.target.value || '10'; refresh(); });
     q('mn_filter').addEventListener('input', e=>{ view.filter = e.target.value; view.limit = 200; refresh(); });
-    q('mn_all').addEventListener('click', ()=>{ const names = existingNames(); visible().forEach(x=>{ if(!x.exists) selected.add(x.g.baseKey); }); refresh(); });
+    q('mn_all').addEventListener('click', ()=>{ const names = existingNames(); visible().forEach(x=>{ if(!x.exists && !x.g.warnings.length) selected.add(x.g.baseKey); }); refresh(); });
     q('mn_none').addEventListener('click', ()=>{ visible().forEach(x=>selected.delete(x.g.baseKey)); refresh(); });
     q('mn_cancel').addEventListener('click', closeModal);
     q('mn_apply').addEventListener('click', ()=>{
