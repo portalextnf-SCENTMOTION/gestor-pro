@@ -909,7 +909,7 @@ function renderStatistics(){
 function filteredSortedProducts(){
   let list = DB.products.filter(p=> matchesSearch(p.name+' '+p.sku+' '+(p.ean||'')+' '+p.category+' '+(p.brand||'')+' '+(p.talla||'')+' '+(p.color||'')+' '+productTypeOf(p), state.search));
   if(state.productsType) list = list.filter(p=>typeMatches(p, state.productsType));
-  if(state.productsFrasco) list = list.filter(p=> state.productsFrasco==='si' ? hasFrasco(p) : !hasFrasco(p));
+  if(state.productsFrasco) list = list.filter(p=> isMinitalla(p) && (state.productsFrasco==='si' ? hasFrasco(p) : !hasFrasco(p)));
   if(state.stockValueFilter!==null) list = list.filter(p=>state.stockValueFilter.includes(p.stock));
   list = applyProductSort(list, state.productsSort);
   return list;
@@ -969,6 +969,7 @@ function renderProducts(){
       ${typeFilterSelectHtml('typeFilterProducts', state.productsType)}
       ${frascoFilterSelectHtml()}
       <button class="btn btn-secondary" id="bulkFrascoBtn" title="Marcar Sí o No en todos los productos que se ven ahora en la lista">Marcar frasco…</button>
+      <button class="btn btn-secondary" id="importFrascosBtn" title="Marca Frasco = Sí en los artículos cuyos códigos vienen en un archivo .txt">Importar frascos (.txt)</button>
       <button class="btn btn-secondary" id="bulkTypeBtn" title="Asignar un tipo a varios productos a la vez">Asignar tipo…</button>
       <button class="btn btn-secondary" id="miniBtn" title="Crear artículos Minitalla a partir de los probadores">Crear minitallas…</button>
       <button class="btn btn-secondary" id="importProductsBtn">Importar artículos (.txt)</button>
@@ -1020,9 +1021,9 @@ function productForm(p){
   </div>
   <div class="field-row">
     <div class="field"><label>Unidad</label><input id="f_unit" value="${esc(p.unit)}"></div>
-    <div class="field"><label>Frasco disponible</label><select id="f_frasco"><option value="no" ${hasFrasco(p)?'':'selected'}>No</option><option value="si" ${hasFrasco(p)?'selected':''}>Sí</option></select></div>
+    <div class="field" id="f_frasco_wrap" style="${isMinitalla(p)?'':'display:none;'}"><label>Frasco disponible</label><select id="f_frasco"><option value="no" ${hasFrasco(p)?'':'selected'}>No</option><option value="si" ${hasFrasco(p)?'selected':''}>Sí</option></select></div>
   </div>
-  <div class="sub" style="margin:-6px 0 12px;">"Frasco disponible" indica si tienes el frasco original para preparar este artículo bajo pedido. Es solo una marca para filtrar y exportar: no añade ni quita stock.</div>
+  <div class="sub" id="f_frasco_note" style="margin:-6px 0 12px;${isMinitalla(p)?'':'display:none;'}">"Frasco disponible" indica si tienes el frasco original para preparar este artículo bajo pedido. Es solo una marca para filtrar y exportar: no añade ni quita stock. Solo se aplica a artículos de tipo Minitalla; en los demás tipos se ignora.</div>
   <div class="field-row">
     <div class="field"><label>Coste (${esc(DB.company.currency)})</label><input id="f_cost" type="number" step="0.01" value="${p.cost}"></div>
     <div class="field"><label>Precio minorista (${esc(DB.company.currency)})</label><input id="f_price" type="number" step="0.01" value="${p.price}"></div>
@@ -1049,7 +1050,14 @@ function openProductModal(id){
   const existing = id ? getProduct(id) : null;
   openModal(existing?'Editar producto':'Nuevo producto', productForm(existing));
   document.getElementById('cancelBtn').addEventListener('click', closeModal);
-  document.querySelectorAll('[data-type-chip]').forEach(ch=>ch.addEventListener('click', ()=>{ document.getElementById('f_type').value = ch.dataset.typeChip; }));
+  // "Frasco disponible" solo se muestra cuando el tipo es Minitalla
+  const syncFrascoField = ()=>{
+    const show = normTxt(document.getElementById('f_type').value)==='minitalla';
+    document.getElementById('f_frasco_wrap').style.display = show ? '' : 'none';
+    document.getElementById('f_frasco_note').style.display = show ? '' : 'none';
+  };
+  document.getElementById('f_type').addEventListener('input', syncFrascoField);
+  document.querySelectorAll('[data-type-chip]').forEach(ch=>ch.addEventListener('click', ()=>{ document.getElementById('f_type').value = ch.dataset.typeChip; syncFrascoField(); }));
 
   const pickBtn = document.getElementById('f_image_pick');
   const removeBtn = document.getElementById('f_image_remove');
@@ -1086,7 +1094,7 @@ function openProductModal(id){
       category: document.getElementById('f_category').value.trim(),
       brand: document.getElementById('f_brand').value.trim(),
       type: canonicalType(document.getElementById('f_type').value),
-      frasco: document.getElementById('f_frasco').value==='si',
+      frasco: document.getElementById('f_frasco').value==='si' && normTxt(document.getElementById('f_type').value)==='minitalla',
       cost: parseFloat(document.getElementById('f_cost').value)||0,
       price: parseFloat(document.getElementById('f_price').value)||0,
       priceWholesale: parseFloat(document.getElementById('f_priceWholesale').value)||0,
@@ -2484,29 +2492,35 @@ function typeChipsHtml(){
   return `<div class="type-chips">${types.map(t=>`<button type="button" class="type-chip" data-type-chip="${esc(t.name)}">${esc(t.name)}</button>`).join('')}</div>`;
 }
 /* ===================== FRASCO DISPONIBLE (marca Sí/No, no es stock) ===================== */
-function hasFrasco(p){ return !!(p && p.frasco===true); }
-function frascoLabel(p){ return hasFrasco(p) ? 'Sí' : 'No'; }
+// La marca Frasco solo existe para artículos de tipo Minitalla. En probadores y demás tipos no se muestra ni se cambia.
+function isMinitalla(p){ return normTxt(productTypeOf(p))==='minitalla'; }
+function hasFrasco(p){ return !!(p && p.frasco===true && isMinitalla(p)); }
+function frascoLabel(p){ return isMinitalla(p) ? (hasFrasco(p) ? 'Sí' : 'No') : ''; }
 function frascoBadgeHtml(p){
+  if(!isMinitalla(p)) return '<span class="sub" title="Solo se usa en minitallas">—</span>';
   const on = hasFrasco(p);
   return `<button type="button" class="badge ${on?'badge-good':'badge-muted'}" data-toggle-frasco="${p.id}" title="Pulsa para cambiar. No modifica el stock." style="border:0;cursor:pointer;font-family:inherit;">${on?'Sí':'No'}</button>`;
 }
 function frascoFilterSelectHtml(){
   const yes = DB.products.filter(hasFrasco).length;
+  const minis = DB.products.filter(isMinitalla).length;
   const cur = state.productsFrasco;
   return `<select class="type-select" id="frascoFilterProducts" title="Filtrar por frasco disponible">
     <option value="">Frasco: todos</option>
     <option value="si" ${cur==='si'?'selected':''}>Con frasco (${yes})</option>
-    <option value="no" ${cur==='no'?'selected':''}>Sin frasco (${DB.products.length-yes})</option>
+    <option value="no" ${cur==='no'?'selected':''}>Sin frasco (${minis-yes})</option>
   </select>`;
 }
 function openBulkFrascoModal(){
-  const list = filteredSortedProducts();
-  if(!list.length){ toast('No hay productos en la lista'); return; }
+  const visible = filteredSortedProducts();
+  const list = visible.filter(isMinitalla);
+  const skipped = visible.length - list.length;
+  if(!list.length){ toast('No hay minitallas en la lista'); return; }
   const filtering = !!(state.search.trim() || state.productsType || state.productsFrasco || state.stockValueFilter!==null);
   const yes = list.filter(hasFrasco).length;
   openModal('Marcar frasco disponible', `
-    <div style="margin-bottom:10px;">Se cambiará la marca <strong>Frasco</strong> en los <strong>${list.length}</strong> productos que se ven ahora en la lista${filtering?' (con la búsqueda y los filtros actuales)':''}. Ahora mismo ${yes} están en Sí y ${list.length-yes} en No.</div>
-    ${filtering?'':'<div class="sub" style="margin-bottom:10px;color:var(--critical);">No hay ninguna búsqueda ni filtro activo: afectará a TODOS los productos. Si solo quieres marcar algunos, cierra y filtra antes (por marca, nombre o tipo).</div>'}
+    <div style="margin-bottom:10px;">Se cambiará la marca <strong>Frasco</strong> en las <strong>${list.length}</strong> minitallas que se ven ahora en la lista${filtering?' (con la búsqueda y los filtros actuales)':''}.${skipped?` Los otros ${skipped} artículos visibles (probadores u otros tipos) no se tocan.`:''} Ahora mismo ${yes} están en Sí y ${list.length-yes} en No.</div>
+    ${filtering?'':'<div class="sub" style="margin-bottom:10px;color:var(--critical);">No hay ninguna búsqueda ni filtro activo: afectará a TODAS las minitallas. Si solo quieres marcar algunos, cierra y filtra antes (por marca, nombre o tipo).</div>'}
     <div class="sub" style="margin-bottom:12px;">No se modifica el stock de ningún producto.</div>
     <div class="modal-actions">
       <button class="btn btn-secondary" id="cancelBtn">Cancelar</button>
@@ -2515,12 +2529,61 @@ function openBulkFrascoModal(){
     </div>`);
   document.getElementById('cancelBtn').addEventListener('click', closeModal);
   const apply = val=>{
-    if(!confirm(`¿Poner Frasco = ${val?'SÍ':'NO'} en ${list.length} productos?`)) return;
+    if(!confirm(`¿Poner Frasco = ${val?'SÍ':'NO'} en ${list.length} minitallas?`)) return;
     list.forEach(p=>{ p.frasco = val; });
-    closeModal(); toast(list.length+' productos marcados con Frasco = '+(val?'Sí':'No')); render();
+    closeModal(); toast(list.length+' minitallas marcadas con Frasco = '+(val?'Sí':'No')); render();
   };
   document.getElementById('bf_si').addEventListener('click', ()=>apply(true));
   document.getElementById('bf_no').addEventListener('click', ()=>apply(false));
+}
+/* ---- Importar frascos desde .txt: un código interno por línea (admite CODIGO;NOMBRE...) ---- */
+function openImportFrascosModal(){
+  openModal('Importar frascos (.txt)', `
+    <div style="margin-bottom:10px;">Elige un archivo <strong>.txt</strong> con un <strong>código interno</strong> por línea (si la línea lleva más datos separados por <code>;</code>, solo se usa el primero). Las <strong>minitallas</strong> con esos códigos quedarán con <strong>Frasco = Sí</strong>. Los probadores y demás tipos no se tocan.</div>
+    <div class="sub" style="margin-bottom:12px;">No se modifica el stock ni ningún otro dato. Antes de aplicar verás la lista para revisarla.</div>
+    <input type="file" id="if_file" accept=".txt,.csv,text/plain">
+    <div id="if_preview" style="margin-top:12px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="cancelBtn">Cancelar</button>
+      <button class="btn btn-primary" id="if_apply" disabled>Aplicar</button>
+    </div>`);
+  document.getElementById('cancelBtn').addEventListener('click', closeModal);
+  let toMark = [];
+  document.getElementById('if_file').addEventListener('change', async e=>{
+    const file = e.target.files[0]; if(!file) return;
+    const text = await file.text();
+    const codes = [];
+    text.split(/\r?\n/).forEach(line=>{
+      const c = line.replace(/^\uFEFF/,'').split(';')[0].trim();
+      if(!c || /^c[oó]digo$/i.test(c)) return;
+      if(!codes.some(x=>x.toLowerCase()===c.toLowerCase())) codes.push(c);
+    });
+    const bySku = {};
+    DB.products.forEach(p=>{ const k = String(p.sku||'').trim().toLowerCase(); if(k) (bySku[k] = bySku[k] || []).push(p); });
+    const found = [], already = [], missing = [], dup = [], notMini = [];
+    codes.forEach(c=>{
+      const m = bySku[c.toLowerCase()];
+      if(!m) { missing.push(c); return; }
+      if(m.length>1) { dup.push(c); return; }
+      if(!isMinitalla(m[0])) { notMini.push(c); return; }
+      (hasFrasco(m[0]) ? already : found).push(m[0]);
+    });
+    toMark = found;
+    const li = p=>`<div style="font-size:12.5px;padding:2px 0;">${esc(p.sku)} · ${esc(p.name)}</div>`;
+    document.getElementById('if_preview').innerHTML = `
+      <div style="margin-bottom:6px;"><strong>${found.length}</strong> artículos pasarán a Frasco = Sí${already.length?` · ${already.length} ya estaban en Sí`:''}</div>
+      <div style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px;">${found.map(li).join('') || '<div class="sub">Ninguno nuevo</div>'}</div>
+      ${missing.length?`<div style="margin-top:10px;color:var(--critical);font-size:12.5px;"><strong>${missing.length} códigos no existen</strong> en tus productos y se ignoran: ${esc(missing.join(', '))}</div>`:''}
+      ${notMini.length?`<div style="margin-top:10px;color:var(--critical);font-size:12.5px;"><strong>${notMini.length} códigos no son minitallas</strong> (probadores u otros tipos) y no se tocan: ${esc(notMini.join(', '))}</div>`:''}
+      ${dup.length?`<div style="margin-top:10px;color:var(--critical);font-size:12.5px;"><strong>${dup.length} códigos están repetidos</strong> en varios productos y no se marcan (márcalos a mano): ${esc(dup.join(', '))}</div>`:''}`;
+    document.getElementById('if_apply').disabled = !found.length;
+  });
+  document.getElementById('if_apply').addEventListener('click', ()=>{
+    if(!toMark.length) return;
+    toMark.forEach(p=>{ p.frasco = true; });
+    const n = toMark.length;
+    closeModal(); toast(n+' artículos marcados con Frasco = Sí'); render();
+  });
 }
 function filteredBatches(){
   return [...DB.movementBatches].sort((a,b)=>b.date.localeCompare(a.date)).filter(b=>{
@@ -3587,15 +3650,16 @@ function attachViewListeners(){
   if(tfm) tfm.addEventListener('change', e=>{ state.movType = e.target.value; render(); });
   const ffp = document.getElementById('frascoFilterProducts');
   if(ffp) ffp.addEventListener('change', e=>{ state.productsFrasco = e.target.value; render(); });
+  const importFrascosBtn = document.getElementById('importFrascosBtn'); if(importFrascosBtn) importFrascosBtn.addEventListener('click', openImportFrascosModal);
   const bulkFrascoBtn = document.getElementById('bulkFrascoBtn'); if(bulkFrascoBtn) bulkFrascoBtn.addEventListener('click', openBulkFrascoModal);
   // Cambio rápido Sí/No en la lista: se actualiza en el sitio (sin redibujar) para no perder la posición
   document.querySelectorAll('[data-toggle-frasco]').forEach(b=>b.addEventListener('click', ()=>{
-    const p = getProduct(b.dataset.toggleFrasco); if(!p) return;
+    const p = getProduct(b.dataset.toggleFrasco); if(!p || !isMinitalla(p)) return;
     p.frasco = !hasFrasco(p);
     b.textContent = p.frasco ? 'Sí' : 'No';
     b.classList.toggle('badge-good', p.frasco); b.classList.toggle('badge-muted', !p.frasco);
     const sel = document.getElementById('frascoFilterProducts');
-    if(sel){ const yes = DB.products.filter(hasFrasco).length; sel.options[1].textContent = `Con frasco (${yes})`; sel.options[2].textContent = `Sin frasco (${DB.products.length-yes})`; }
+    if(sel){ const yes = DB.products.filter(hasFrasco).length; sel.options[1].textContent = `Con frasco (${yes})`; sel.options[2].textContent = `Sin frasco (${DB.products.filter(isMinitalla).length-yes})`; }
     if(typeof scheduleAutosave === 'function') scheduleAutosave();
   }));
   const bulkBtn = document.getElementById('bulkTypeBtn'); if(bulkBtn) bulkBtn.addEventListener('click', openBulkTypeModal);
