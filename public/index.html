@@ -265,7 +265,7 @@ let DB = {
 };
 
 let state = { view:'dashboard', search:'', editingInvoiceId:null, dismissedBanner:false, stats:{ dateFrom:'', dateTo:'', category:'', productId:'', brand:'', priceMin:'', priceMax:'' },
-  productsSort:{ field:null, dir:null }, stockValueFilter:null, openDropdown:null, productsType:'', movType:'' };
+  productsSort:{ field:null, dir:null }, stockValueFilter:null, openDropdown:null, productsType:'', movType:'', productsFrasco:'' };
 
 /* ===================== HELPERS ===================== */
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -909,6 +909,7 @@ function renderStatistics(){
 function filteredSortedProducts(){
   let list = DB.products.filter(p=> matchesSearch(p.name+' '+p.sku+' '+(p.ean||'')+' '+p.category+' '+(p.brand||'')+' '+(p.talla||'')+' '+(p.color||'')+' '+productTypeOf(p), state.search));
   if(state.productsType) list = list.filter(p=>typeMatches(p, state.productsType));
+  if(state.productsFrasco) list = list.filter(p=> state.productsFrasco==='si' ? hasFrasco(p) : !hasFrasco(p));
   if(state.stockValueFilter!==null) list = list.filter(p=>state.stockValueFilter.includes(p.stock));
   list = applyProductSort(list, state.productsSort);
   return list;
@@ -933,6 +934,7 @@ function renderProducts(){
       <td>${esc(p.name)}</td>
       <td>${esc(p.category)}</td>
       <td>${esc(productTypeOf(p)||'—')}</td>
+      <td>${frascoBadgeHtml(p)}</td>
       <td>${esc(p.brand||'—')}</td>
       <td class="num">${p.stock} ${esc(p.unit)}</td>
       <td class="num">${fmtMoney(p.cost)}</td>
@@ -948,12 +950,12 @@ function renderProducts(){
         <button class="icon-btn" data-del-product="${p.id}">Eliminar</button>
       </div></td>
     </tr>`;
-  }).join('') : `<tr><td colspan="14" class="empty">Sin artículos que coincidan con la búsqueda o el filtro</td></tr>`;
+  }).join('') : `<tr><td colspan="15" class="empty">Sin artículos que coincidan con la búsqueda o el filtro</td></tr>`;
 
   const sumUnits = list.reduce((a,p)=>a+(Number(p.stock)||0),0);
   const sumCost = list.reduce((a,p)=>a+(Number(p.stock)||0)*(Number(p.cost)||0),0);
   const sumRetail = list.reduce((a,p)=>a+(Number(p.stock)||0)*(Number(p.price)||0),0);
-  const filtering = !!(state.search.trim() || state.productsType || state.stockValueFilter!==null);
+  const filtering = !!(state.search.trim() || state.productsType || state.productsFrasco || state.stockValueFilter!==null);
   return `
   <div class="cards">
     <div class="card"><div class="label">Productos${filtering?' (con filtros)':''}</div><div class="value">${list.length}</div></div>
@@ -965,6 +967,8 @@ function renderProducts(){
     <input class="search" id="searchInput" placeholder="Buscar por nombre, código, EAN, marca, categoría o tipo…" value="${esc(state.search)}">
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       ${typeFilterSelectHtml('typeFilterProducts', state.productsType)}
+      ${frascoFilterSelectHtml()}
+      <button class="btn btn-secondary" id="bulkFrascoBtn" title="Marcar Sí o No en todos los productos que se ven ahora en la lista">Marcar frasco…</button>
       <button class="btn btn-secondary" id="bulkTypeBtn" title="Asignar un tipo a varios productos a la vez">Asignar tipo…</button>
       <button class="btn btn-secondary" id="miniBtn" title="Crear artículos Minitalla a partir de los probadores">Crear minitallas…</button>
       <button class="btn btn-secondary" id="importProductsBtn">Importar artículos (.txt)</button>
@@ -980,7 +984,7 @@ function renderProducts(){
   </div>
   <div class="panel">
     <table>
-      <thead><tr><th></th><th>Código</th><th>EAN</th><th>Nombre</th><th>Categoría</th><th>Tipo</th><th>Marca</th><th class="num">Stock</th><th class="num">Coste</th><th class="num">P. minorista</th><th class="num">P. mayorista</th><th class="num">V. mercado</th><th>Estado</th><th></th></tr></thead>
+      <thead><tr><th></th><th>Código</th><th>EAN</th><th>Nombre</th><th>Categoría</th><th>Tipo</th><th title="¿Tienes el frasco original para hacer este artículo? No es stock: es solo una marca. Pulsa para cambiar.">Frasco</th><th>Marca</th><th class="num">Stock</th><th class="num">Coste</th><th class="num">P. minorista</th><th class="num">P. mayorista</th><th class="num">V. mercado</th><th>Estado</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>`;
@@ -1014,7 +1018,11 @@ function productForm(p){
     <input id="f_type" list="f_typeList" value="${esc(productTypeOf(p))}" placeholder="Ej. Probador, Minitalla, Miniatura, Frasco completo" autocomplete="off">
     ${typeDatalistHtml('f_typeList')}${typeChipsHtml()}
   </div>
-  <div class="field"><label>Unidad</label><input id="f_unit" value="${esc(p.unit)}"></div>
+  <div class="field-row">
+    <div class="field"><label>Unidad</label><input id="f_unit" value="${esc(p.unit)}"></div>
+    <div class="field"><label>Frasco disponible</label><select id="f_frasco"><option value="no" ${hasFrasco(p)?'':'selected'}>No</option><option value="si" ${hasFrasco(p)?'selected':''}>Sí</option></select></div>
+  </div>
+  <div class="sub" style="margin:-6px 0 12px;">"Frasco disponible" indica si tienes el frasco original para preparar este artículo bajo pedido. Es solo una marca para filtrar y exportar: no añade ni quita stock.</div>
   <div class="field-row">
     <div class="field"><label>Coste (${esc(DB.company.currency)})</label><input id="f_cost" type="number" step="0.01" value="${p.cost}"></div>
     <div class="field"><label>Precio minorista (${esc(DB.company.currency)})</label><input id="f_price" type="number" step="0.01" value="${p.price}"></div>
@@ -1078,6 +1086,7 @@ function openProductModal(id){
       category: document.getElementById('f_category').value.trim(),
       brand: document.getElementById('f_brand').value.trim(),
       type: canonicalType(document.getElementById('f_type').value),
+      frasco: document.getElementById('f_frasco').value==='si',
       cost: parseFloat(document.getElementById('f_cost').value)||0,
       price: parseFloat(document.getElementById('f_price').value)||0,
       priceWholesale: parseFloat(document.getElementById('f_priceWholesale').value)||0,
@@ -2474,6 +2483,45 @@ function typeChipsHtml(){
   if(!types.length) return '';
   return `<div class="type-chips">${types.map(t=>`<button type="button" class="type-chip" data-type-chip="${esc(t.name)}">${esc(t.name)}</button>`).join('')}</div>`;
 }
+/* ===================== FRASCO DISPONIBLE (marca Sí/No, no es stock) ===================== */
+function hasFrasco(p){ return !!(p && p.frasco===true); }
+function frascoLabel(p){ return hasFrasco(p) ? 'Sí' : 'No'; }
+function frascoBadgeHtml(p){
+  const on = hasFrasco(p);
+  return `<button type="button" class="badge ${on?'badge-good':'badge-muted'}" data-toggle-frasco="${p.id}" title="Pulsa para cambiar. No modifica el stock." style="border:0;cursor:pointer;font-family:inherit;">${on?'Sí':'No'}</button>`;
+}
+function frascoFilterSelectHtml(){
+  const yes = DB.products.filter(hasFrasco).length;
+  const cur = state.productsFrasco;
+  return `<select class="type-select" id="frascoFilterProducts" title="Filtrar por frasco disponible">
+    <option value="">Frasco: todos</option>
+    <option value="si" ${cur==='si'?'selected':''}>Con frasco (${yes})</option>
+    <option value="no" ${cur==='no'?'selected':''}>Sin frasco (${DB.products.length-yes})</option>
+  </select>`;
+}
+function openBulkFrascoModal(){
+  const list = filteredSortedProducts();
+  if(!list.length){ toast('No hay productos en la lista'); return; }
+  const filtering = !!(state.search.trim() || state.productsType || state.productsFrasco || state.stockValueFilter!==null);
+  const yes = list.filter(hasFrasco).length;
+  openModal('Marcar frasco disponible', `
+    <div style="margin-bottom:10px;">Se cambiará la marca <strong>Frasco</strong> en los <strong>${list.length}</strong> productos que se ven ahora en la lista${filtering?' (con la búsqueda y los filtros actuales)':''}. Ahora mismo ${yes} están en Sí y ${list.length-yes} en No.</div>
+    ${filtering?'':'<div class="sub" style="margin-bottom:10px;color:var(--critical);">No hay ninguna búsqueda ni filtro activo: afectará a TODOS los productos. Si solo quieres marcar algunos, cierra y filtra antes (por marca, nombre o tipo).</div>'}
+    <div class="sub" style="margin-bottom:12px;">No se modifica el stock de ningún producto.</div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="cancelBtn">Cancelar</button>
+      <button class="btn btn-secondary" id="bf_no">Marcar todos NO</button>
+      <button class="btn btn-primary" id="bf_si">Marcar todos SÍ</button>
+    </div>`);
+  document.getElementById('cancelBtn').addEventListener('click', closeModal);
+  const apply = val=>{
+    if(!confirm(`¿Poner Frasco = ${val?'SÍ':'NO'} en ${list.length} productos?`)) return;
+    list.forEach(p=>{ p.frasco = val; });
+    closeModal(); toast(list.length+' productos marcados con Frasco = '+(val?'Sí':'No')); render();
+  };
+  document.getElementById('bf_si').addEventListener('click', ()=>apply(true));
+  document.getElementById('bf_no').addEventListener('click', ()=>apply(false));
+}
 function filteredBatches(){
   return [...DB.movementBatches].sort((a,b)=>b.date.localeCompare(a.date)).filter(b=>{
     const party = b.type==='in' ? (b.supplierId?getSupplier(b.supplierId):null) : (b.clientId?getClient(b.clientId):null);
@@ -3221,8 +3269,8 @@ function getExportDataForView(){
   }
   if(view==='products'){
     const list = filteredSortedProducts();
-    return { title:'Productos', headers:['Código','EAN','Nombre','Categoría','Tipo','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'],
-      rows: list.map(p=>[p.sku, p.ean||'', p.name, p.category, productTypeOf(p), p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', stockStatus(p).label]) };
+    return { title:'Productos', headers:['Código','EAN','Nombre','Categoría','Tipo','Frasco','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'],
+      rows: list.map(p=>[p.sku, p.ean||'', p.name, p.category, productTypeOf(p), frascoLabel(p), p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', stockStatus(p).label]) };
   }
   if(view==='movements'){
     const list = filteredBatches();
@@ -3295,7 +3343,7 @@ function xmlEsc(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<
 function exportProductsExcelWithPhotos(){
   const list = filteredSortedProducts();
   if(!list.length){ toast('No hay datos para exportar'); return; }
-  const headers = ['Foto','Código','EAN','Nombre','Categoría','Tipo','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'];
+  const headers = ['Foto','Código','EAN','Nombre','Categoría','Tipo','Frasco','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'];
   const ROW_H = 78; // points
   const COL_W = 16; // Foto column width (character units)
   const IMG_PX = 90;
@@ -3314,7 +3362,7 @@ function exportProductsExcelWithPhotos(){
   list.forEach((p, i)=>{
     const excelRow = i + 2; // 1-indexed, header is row 1
     const st = stockStatus(p);
-    const values = ['', p.sku, p.ean||'', p.name, p.category, productTypeOf(p), p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', st.label];
+    const values = ['', p.sku, p.ean||'', p.name, p.category, productTypeOf(p), frascoLabel(p), p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', st.label];
     const cells = values.map((v,ci)=>`<c r="${colLetter(ci)}${excelRow}" t="inlineStr"><is><t>${xmlEsc(String(v))}</t></is></c>`).join('');
     sheetRows += `<row r="${excelRow}" ht="${ROW_H}" customHeight="1">${cells}</row>`;
 
@@ -3438,7 +3486,7 @@ function exportProductsPDFWithPhotos(){
   const list = filteredSortedProducts();
   if(!list.length){ toast('No hay datos para exportar'); return; }
   const stamp = new Date().toLocaleDateString('es-ES');
-  const theadHtml = `<tr><th style="width:56px;">Foto</th><th>Código</th><th>EAN</th><th>Nombre</th><th>Categoría</th><th>Tipo</th><th>Marca</th><th>Stock</th><th>Coste</th><th>P. minorista</th><th>P. mayorista</th><th>V. mercado</th><th>Estado</th></tr>`;
+  const theadHtml = `<tr><th style="width:56px;">Foto</th><th>Código</th><th>EAN</th><th>Nombre</th><th>Categoría</th><th>Tipo</th><th>Frasco</th><th>Marca</th><th>Stock</th><th>Coste</th><th>P. minorista</th><th>P. mayorista</th><th>V. mercado</th><th>Estado</th></tr>`;
   const tbodyHtml = list.map(p=>{
     const st = stockStatus(p);
     const photoCell = p.image ? `<img src="${p.image}" class="thumb" alt="">` : `<div class="thumb thumb-empty"></div>`;
@@ -3449,6 +3497,7 @@ function exportProductsPDFWithPhotos(){
       <td style="vertical-align:middle;">${esc(p.name)}</td>
       <td style="vertical-align:middle;">${esc(p.category)}</td>
       <td style="vertical-align:middle;">${esc(productTypeOf(p))}</td>
+      <td style="vertical-align:middle;">${frascoLabel(p)}</td>
       <td style="vertical-align:middle;">${esc(p.brand||'')}</td>
       <td style="vertical-align:middle;">${p.stock} ${esc(p.unit)}</td>
       <td style="vertical-align:middle;">${fmtMoney(p.cost)}</td>
@@ -3536,6 +3585,19 @@ function attachViewListeners(){
   if(tfp) tfp.addEventListener('change', e=>{ state.productsType = e.target.value; render(); });
   const tfm = document.getElementById('typeFilterMovements');
   if(tfm) tfm.addEventListener('change', e=>{ state.movType = e.target.value; render(); });
+  const ffp = document.getElementById('frascoFilterProducts');
+  if(ffp) ffp.addEventListener('change', e=>{ state.productsFrasco = e.target.value; render(); });
+  const bulkFrascoBtn = document.getElementById('bulkFrascoBtn'); if(bulkFrascoBtn) bulkFrascoBtn.addEventListener('click', openBulkFrascoModal);
+  // Cambio rápido Sí/No en la lista: se actualiza en el sitio (sin redibujar) para no perder la posición
+  document.querySelectorAll('[data-toggle-frasco]').forEach(b=>b.addEventListener('click', ()=>{
+    const p = getProduct(b.dataset.toggleFrasco); if(!p) return;
+    p.frasco = !hasFrasco(p);
+    b.textContent = p.frasco ? 'Sí' : 'No';
+    b.classList.toggle('badge-good', p.frasco); b.classList.toggle('badge-muted', !p.frasco);
+    const sel = document.getElementById('frascoFilterProducts');
+    if(sel){ const yes = DB.products.filter(hasFrasco).length; sel.options[1].textContent = `Con frasco (${yes})`; sel.options[2].textContent = `Sin frasco (${DB.products.length-yes})`; }
+    if(typeof scheduleAutosave === 'function') scheduleAutosave();
+  }));
   const bulkBtn = document.getElementById('bulkTypeBtn'); if(bulkBtn) bulkBtn.addEventListener('click', openBulkTypeModal);
   const miniBtn = document.getElementById('miniBtn'); if(miniBtn) miniBtn.addEventListener('click', openMiniModal);
   const ghBtn = document.getElementById('generalHistoryBtn'); if(ghBtn) ghBtn.addEventListener('click', ()=>openHistoryModal());
