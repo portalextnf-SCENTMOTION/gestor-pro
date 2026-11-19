@@ -288,10 +288,35 @@ function batchPaymentSummary(batch){
   return { label:'Parcial · '+fmtMoney(total-paid)+' pend.', cls:'badge-warning' };
 }
 function nextInternalCode(){ const n = DB.company.productSeq || 1000; DB.company.productSeq = n+1; return String(n); }
+/* ---- EAN múltiples: p.ean = EAN principal, p.eans = EAN adicionales (misma fragancia y tamaño, otra caja/código) ---- */
+function normEan(s){ return String(s??'').replace(/\s+/g,'').trim(); }
+function allEans(p){
+  const out = [];
+  if(!p) return out;
+  [p.ean].concat(Array.isArray(p.eans)?p.eans:[]).forEach(e=>{ e = normEan(e); if(e && !out.includes(e)) out.push(e); });
+  return out;
+}
+function extraEans(p){ const a = allEans(p); const main = normEan(p&&p.ean); return main ? a.slice(1) : a; }
+function eansText(p){ return allEans(p).join(' '); }
+function productWithEan(ean, exceptId){
+  ean = normEan(ean); if(!ean) return null;
+  return DB.products.find(p=>p.id!==exceptId && allEans(p).includes(ean)) || null;
+}
+/* Añade un EAN a un artículo. Devuelve 'added' | 'already' | 'taken' (lo tiene otro artículo) | 'empty' */
+function addEanToProduct(p, ean){
+  ean = normEan(ean);
+  if(!ean) return 'empty';
+  if(allEans(p).includes(ean)) return 'already';
+  if(productWithEan(ean, p.id)) return 'taken';
+  if(!normEan(p.ean)) p.ean = ean;
+  else { if(!Array.isArray(p.eans)) p.eans = []; p.eans.push(ean); }
+  return 'added';
+}
 function findProductByCode(code){
   code = String(code||'').trim();
   if(!code) return null;
-  return DB.products.find(p => (p.ean && String(p.ean).trim()===code) || (p.sku && String(p.sku).trim()===code)) || null;
+  const e = normEan(code);
+  return DB.products.find(p => allEans(p).includes(e) || (p.sku && String(p.sku).trim()===code)) || null;
 }
 function parseImportTxt(text){
   const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0);
@@ -907,7 +932,7 @@ function renderStatistics(){
 /* ===================== STOCK ===================== */
 /* ===================== PRODUCTS ===================== */
 function filteredSortedProducts(){
-  let list = DB.products.filter(p=> matchesSearch(p.name+' '+p.sku+' '+(p.ean||'')+' '+p.category+' '+(p.brand||'')+' '+(p.talla||'')+' '+(p.color||'')+' '+productTypeOf(p), state.search));
+  let list = DB.products.filter(p=> matchesSearch(p.name+' '+p.sku+' '+eansText(p)+' '+p.category+' '+(p.brand||'')+' '+(p.talla||'')+' '+(p.color||'')+' '+productTypeOf(p), state.search));
   if(state.productsType) list = list.filter(p=>typeMatches(p, state.productsType));
   if(state.productsFrasco) list = list.filter(p=> isMinitalla(p) && (state.productsFrasco==='si' ? hasFrasco(p) : !hasFrasco(p)));
   if(state.stockValueFilter!==null) list = list.filter(p=>state.stockValueFilter.includes(p.stock));
@@ -930,7 +955,7 @@ function renderProducts(){
     return `<tr>
       <td>${p.image?`<img src="${p.image}" class="thumb" alt="">`:`<div class="thumb thumb-empty"></div>`}</td>
       <td>${esc(p.sku)}</td>
-      <td>${esc(p.ean||'—')}</td>
+      <td>${esc(allEans(p)[0]||'—')}${allEans(p).length>1?` <span class="badge badge-muted" title="Otros EAN: ${esc(allEans(p).slice(1).join(', '))}">+${allEans(p).length-1}</span>`:''}</td>
       <td>${esc(p.name)}</td>
       <td>${esc(p.category)}</td>
       <td>${esc(productTypeOf(p)||'—')}</td>
@@ -1008,7 +1033,14 @@ function productForm(p){
   </div>
   <div class="field-row">
     <div class="field"><label>Código interno</label><input id="f_sku" value="${esc(p.sku)}"></div>
-    <div class="field"><label>Código EAN / barras</label><input id="f_ean" value="${esc(p.ean||'')}"></div>
+    <div class="field"><label>Añadir código EAN / barras</label>
+      <div style="display:flex;gap:6px;"><input id="f_ean_new" placeholder="Escribe o escanea y pulsa Intro" autocomplete="off" style="flex:1;"><button type="button" class="btn btn-secondary btn-sm" id="f_ean_add">Añadir</button></div>
+    </div>
+  </div>
+  <div class="field" style="margin-top:-4px;">
+    <label>Códigos EAN de este artículo</label>
+    <div id="f_ean_list"></div>
+    <div style="margin-top:4px;font-size:12px;color:var(--muted);line-height:1.4;">Puedes asignar varios EAN al mismo artículo (misma fragancia y tamaño con distinta caja o código). Cualquiera de ellos encuentra este artículo en búsquedas, entradas/salidas, pedidos e importaciones. Un EAN no puede estar en dos artículos.</div>
   </div>
   <div class="field"><label>Nombre del producto</label><input id="f_name" value="${esc(p.name)}"></div>
   <div class="field-row">
@@ -1057,6 +1089,33 @@ function openProductModal(id){
     document.getElementById('f_frasco_note').style.display = show ? '' : 'none';
   };
   document.getElementById('f_type').addEventListener('input', syncFrascoField);
+
+  // ---- Lista de EAN (el primero es el principal) ----
+  let eanList = existing ? allEans(existing) : [];
+  const eanListEl = document.getElementById('f_ean_list');
+  const eanNewEl = document.getElementById('f_ean_new');
+  const drawEans = ()=>{
+    eanListEl.innerHTML = eanList.length ? eanList.map((e,i)=>`
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--border);border-radius:8px;margin-bottom:4px;">
+        <span style="font-family:monospace;font-size:13px;flex:1;">${esc(e)}</span>
+        ${i===0?'<span class="badge badge-good">Principal</span>':`<button type="button" class="btn btn-secondary btn-sm" data-ean-main="${i}">Hacer principal</button>`}
+        <button type="button" class="btn btn-secondary btn-sm" data-ean-del="${i}" title="Quitar este EAN">Quitar</button>
+      </div>`).join('') : '<div style="font-size:12.5px;color:var(--muted);">Sin EAN asignado</div>';
+    eanListEl.querySelectorAll('[data-ean-del]').forEach(b=>b.addEventListener('click', ()=>{ eanList.splice(+b.dataset.eanDel,1); drawEans(); }));
+    eanListEl.querySelectorAll('[data-ean-main]').forEach(b=>b.addEventListener('click', ()=>{ const i=+b.dataset.eanMain; const [e]=eanList.splice(i,1); eanList.unshift(e); drawEans(); }));
+  };
+  const addEanFromInput = ()=>{
+    const e = normEan(eanNewEl.value);
+    if(!e) return true;
+    if(eanList.includes(e)){ toast('Ese EAN ya está en este artículo'); eanNewEl.value=''; return true; }
+    const other = productWithEan(e, existing?existing.id:null);
+    if(other){ toast('El EAN '+e+' ya pertenece a: '+(other.sku?other.sku+' · ':'')+other.name); eanNewEl.select(); return false; }
+    eanList.push(e); eanNewEl.value=''; drawEans(); eanNewEl.focus(); return true;
+  };
+  document.getElementById('f_ean_add').addEventListener('click', addEanFromInput);
+  eanNewEl.addEventListener('keydown', ev=>{ if(ev.key==='Enter'){ ev.preventDefault(); addEanFromInput(); } });
+  drawEans();
+
   document.querySelectorAll('[data-type-chip]').forEach(ch=>ch.addEventListener('click', ()=>{ document.getElementById('f_type').value = ch.dataset.typeChip; syncFrascoField(); }));
 
   const pickBtn = document.getElementById('f_image_pick');
@@ -1089,7 +1148,6 @@ function openProductModal(id){
   document.getElementById('saveBtn').addEventListener('click', ()=>{
     const data = {
       sku: document.getElementById('f_sku').value.trim(),
-      ean: document.getElementById('f_ean').value.trim(),
       name: document.getElementById('f_name').value.trim(),
       category: document.getElementById('f_category').value.trim(),
       brand: document.getElementById('f_brand').value.trim(),
@@ -1107,6 +1165,13 @@ function openProductModal(id){
       image: document.getElementById('f_image').value
     };
     if(!data.name){ toast('El nombre es obligatorio'); return; }
+    if(!addEanFromInput()) return; // EAN escrito sin pulsar Añadir: se añade (o se avisa si es de otro artículo)
+    for(const e of eanList){
+      const other = productWithEan(e, existing?existing.id:null);
+      if(other){ toast('El EAN '+e+' ya pertenece a: '+(other.sku?other.sku+' · ':'')+other.name); return; }
+    }
+    data.ean = eanList[0] || '';
+    data.eans = eanList.slice(1);
     const today = new Date().toISOString().slice(0,10);
     if(existing){
       if(data.price !== existing.price) DB.priceHistory.push({ id: uid('ph'), productId: existing.id, date: today, field:'price', oldValue: existing.price, newValue: data.price });
@@ -1151,11 +1216,12 @@ function openImportProductsModal(){
         const rows = parseProductImportTxt(reader.result);
         if(!rows.length){ toast('El archivo no contiene filas válidas (revisa que cada línea tenga al menos el nombre)'); return; }
         let created = 0, updated = 0;
+        const eanConflicts = [];
         const today = new Date().toISOString().slice(0,10);
         rows.forEach(r=>{
           let p = null;
           if(r.codigo) p = DB.products.find(x=>x.sku===r.codigo);
-          if(!p && r.ean) p = DB.products.find(x=>x.ean===r.ean);
+          if(!p && r.ean) p = productWithEan(r.ean);
           if(p){
             p.name = r.nombre;
             if(r.categoria) p.category = r.categoria;
@@ -1164,12 +1230,14 @@ function openImportProductsModal(){
             p.price = r.precioMinorista;
             p.priceWholesale = r.precioMayorista;
             if(r.valorMercado) p.marketPrice = r.valorMercado;
-            if(r.ean) p.ean = r.ean;
+            if(r.ean && addEanToProduct(p, r.ean)==='taken') eanConflicts.push(r.ean+' (ya está en '+productWithEan(r.ean, p.id).sku+')');
             DB.priceHistory.push({ id: uid('ph'), productId: p.id, date: today, field:'price', oldValue:null, newValue: p.price });
             updated++;
           } else {
+            const eanFree = r.ean && !productWithEan(r.ean);
+            if(r.ean && !eanFree) eanConflicts.push(r.ean+' (ya está en '+productWithEan(r.ean).sku+')');
             const newP = {
-              id: uid('p'), sku: r.codigo || nextInternalCode(), ean: r.ean,
+              id: uid('p'), sku: r.codigo || nextInternalCode(), ean: eanFree ? normEan(r.ean) : '', eans: [],
               name: r.nombre, category: r.categoria, brand: r.marca, cost: r.coste, price: r.precioMinorista, priceWholesale: r.precioMayorista, marketPrice: r.valorMercado,
               stock: 0, minStock: 0, unit:'ud',
               talla:'', color:'', image: ''
@@ -1180,20 +1248,22 @@ function openImportProductsModal(){
           }
         });
         closeModal();
-        showImportProductsSummary(created, updated, rows.length);
+        showImportProductsSummary(created, updated, rows.length, eanConflicts);
         render();
       };
       reader.readAsText(file);
     });
   });
 }
-function showImportProductsSummary(created, updated, total){
+function showImportProductsSummary(created, updated, total, eanConflicts){
+  eanConflicts = eanConflicts || [];
   const body = `
     <p style="font-size:13px;">Se procesaron <strong>${total}</strong> línea(s) del archivo:</p>
     <ul style="font-size:13px;padding-left:20px;margin:8px 0;">
       <li><strong>${created}</strong> artículo(s) nuevo(s) creado(s)</li>
       <li><strong>${updated}</strong> artículo(s) existente(s) actualizado(s)</li>
     </ul>
+    ${eanConflicts.length?`<p style="font-size:12.5px;color:var(--critical);"><strong>${eanConflicts.length} EAN no se asignaron</strong> porque ya pertenecen a otro artículo: ${esc(eanConflicts.join(', '))}</p>`:''}
     <p style="font-size:12px;color:var(--muted);">Los artículos nuevos han entrado con 0 unidades de stock. Cuando quieras meter mercancía, usa "Entradas/Salidas".</p>
     <div class="modal-actions"><button class="btn btn-primary" id="closeSummaryBtn">Cerrar</button></div>`;
   openModal('Resultado de la importación', body, ()=>{
@@ -1286,7 +1356,7 @@ function normalizeForMatch(s){
 function findProductForPhotoFilename(base){
   // 1) Exact code/EAN match (highest confidence)
   const baseLower = base.trim().toLowerCase();
-  const byCode = DB.products.find(x=> (x.sku||'').trim().toLowerCase()===baseLower || (x.ean||'').trim().toLowerCase()===baseLower);
+  const byCode = DB.products.find(x=> (x.sku||'').trim().toLowerCase()===baseLower || allEans(x).some(e=>e.toLowerCase()===baseLower));
   if(byCode) return { product: byCode, ambiguous: null };
 
   // 2) Exact name match (normalized)
@@ -1469,7 +1539,7 @@ function updateItemSearchResults(query){
   if(!box) return;
   const q = query.trim().toLowerCase();
   if(!q){ box.innerHTML=''; box.style.display='none'; return; }
-  const matches = DB.products.filter(p=>matchesSearch(p.name+' '+p.sku+' '+(p.ean||''), query)).slice(0,8);
+  const matches = DB.products.filter(p=>matchesSearch(p.name+' '+p.sku+' '+eansText(p), query)).slice(0,8);
   if(!matches.length){
     box.innerHTML = `<div class="search-dropdown-empty">Sin resultados para "${esc(query)}"</div>`;
   } else {
@@ -1574,6 +1644,7 @@ function renderMovementBatchEditor(){
 
     const searchInput = document.getElementById('itemSearchInput');
     searchInput.addEventListener('input', e=>updateItemSearchResults(e.target.value));
+    searchInput.addEventListener('keydown', e=>{ if(e.key!=='Enter') return; const p = findProductByCode(searchInput.value); if(p){ e.preventDefault(); addItemToBatch(p.id); } });
     searchInput.addEventListener('blur', ()=>{ setTimeout(()=>{ const box=document.getElementById('itemSearchResults'); if(box) box.style.display='none'; }, 150); });
     document.getElementById('importItemsBtn').addEventListener('click', openImportItemsIntoBatch);
 
@@ -1816,7 +1887,7 @@ function updateOrderSearchResults(query){
   if(!box) return;
   const q = query.trim().toLowerCase();
   if(!q){ box.innerHTML=''; box.style.display='none'; return; }
-  const matches = DB.products.filter(p=>matchesSearch(p.name+' '+p.sku+' '+(p.ean||''), query)).slice(0,8);
+  const matches = DB.products.filter(p=>matchesSearch(p.name+' '+p.sku+' '+eansText(p), query)).slice(0,8);
   if(!matches.length){
     box.innerHTML = `<div class="search-dropdown-empty">Sin resultados para "${esc(query)}"</div>`;
   } else {
@@ -1894,6 +1965,7 @@ function renderOrderEditor(){
 
     const searchInput = document.getElementById('orderItemSearchInput');
     searchInput.addEventListener('input', e=>updateOrderSearchResults(e.target.value));
+    searchInput.addEventListener('keydown', e=>{ if(e.key!=='Enter') return; const p = findProductByCode(searchInput.value); if(p){ e.preventDefault(); addItemToOrder(p.id); } });
     searchInput.addEventListener('blur', ()=>{ setTimeout(()=>{ const box=document.getElementById('orderItemSearchResults'); if(box) box.style.display='none'; }, 150); });
 
     document.querySelectorAll('[data-order-item-remove]').forEach(b=>b.addEventListener('click', ()=>{ orderDraft.items.splice(+b.dataset.orderItemRemove,1); renderOrderEditor(); }));
@@ -2562,7 +2634,8 @@ function openImportFrascosModal(){
     DB.products.forEach(p=>{ const k = String(p.sku||'').trim().toLowerCase(); if(k) (bySku[k] = bySku[k] || []).push(p); });
     const found = [], already = [], missing = [], dup = [], notMini = [];
     codes.forEach(c=>{
-      const m = bySku[c.toLowerCase()];
+      let m = bySku[c.toLowerCase()];
+      if(!m){ const pe = productWithEan(c); if(pe) m = [pe]; }
       if(!m) { missing.push(c); return; }
       if(m.length>1) { dup.push(c); return; }
       if(!isMinitalla(m[0])) { notMini.push(c); return; }
@@ -2714,7 +2787,7 @@ function histProductPredicate(h){
     const p = getProduct(id);
     if(!p) return noFilter;
     if(h.type && !typeMatches(p, h.type)) return false;
-    if(h.search.trim() && !matchesSearch(p.name+' '+p.sku+' '+(p.ean||'')+' '+(p.brand||'')+' '+productTypeOf(p), h.search)) return false;
+    if(h.search.trim() && !matchesSearch(p.name+' '+p.sku+' '+eansText(p)+' '+(p.brand||'')+' '+productTypeOf(p), h.search)) return false;
     return true;
   };
 }
@@ -3003,7 +3076,7 @@ function openHistoryModal(preset){
   if(h.productId && !p){ toast('Producto no encontrado'); return; }
   const sc = (key,label)=>`<button type="button" class="btn ${histActivePeriod(h)===key?'btn-primary':'btn-secondary'} btn-sm" data-hist-period="${key}">${label}</button>`;
   const body = `
-    ${p?`<div class="sub" style="margin:-8px 0 12px;font-size:12.5px;">Código ${esc(p.sku||'—')}${p.ean?' · EAN '+esc(p.ean):''}${productTypeOf(p)?' · '+esc(productTypeOf(p)):''} · Stock actual: <strong>${p.stock} ${esc(p.unit)}</strong></div>`:''}
+    ${p?`<div class="sub" style="margin:-8px 0 12px;font-size:12.5px;">Código ${esc(p.sku||'—')}${allEans(p).length?' · EAN '+esc(allEans(p).join(', ')):''}${productTypeOf(p)?' · '+esc(productTypeOf(p)):''} · Stock actual: <strong>${p.stock} ${esc(p.unit)}</strong></div>`:''}
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
       <div class="field" style="margin:0;"><label>Desde</label><input type="date" id="h_from" value="${h.from}"></div>
       <div class="field" style="margin:0;"><label>Hasta</label><input type="date" id="h_to" value="${h.to}"></div>
@@ -3332,8 +3405,8 @@ function getExportDataForView(){
   }
   if(view==='products'){
     const list = filteredSortedProducts();
-    return { title:'Productos', headers:['Código','EAN','Nombre','Categoría','Tipo','Frasco','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'],
-      rows: list.map(p=>[p.sku, p.ean||'', p.name, p.category, productTypeOf(p), frascoLabel(p), p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', stockStatus(p).label]) };
+    return { title:'Productos', headers:['Código','EAN','EAN adicionales','Nombre','Categoría','Tipo','Frasco','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'],
+      rows: list.map(p=>[p.sku, allEans(p)[0]||'', allEans(p).slice(1).join(' | '), p.name, p.category, productTypeOf(p), frascoLabel(p), p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', stockStatus(p).label]) };
   }
   if(view==='movements'){
     const list = filteredBatches();
@@ -3406,7 +3479,7 @@ function xmlEsc(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<
 function exportProductsExcelWithPhotos(){
   const list = filteredSortedProducts();
   if(!list.length){ toast('No hay datos para exportar'); return; }
-  const headers = ['Foto','Código','EAN','Nombre','Categoría','Tipo','Frasco','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'];
+  const headers = ['Foto','Código','EAN','EAN adicionales','Nombre','Categoría','Tipo','Frasco','Marca','Stock','Coste','P. minorista','P. mayorista','V. mercado','Estado'];
   const ROW_H = 78; // points
   const COL_W = 16; // Foto column width (character units)
   const IMG_PX = 90;
@@ -3425,7 +3498,7 @@ function exportProductsExcelWithPhotos(){
   list.forEach((p, i)=>{
     const excelRow = i + 2; // 1-indexed, header is row 1
     const st = stockStatus(p);
-    const values = ['', p.sku, p.ean||'', p.name, p.category, productTypeOf(p), frascoLabel(p), p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', st.label];
+    const values = ['', p.sku, allEans(p)[0]||'', allEans(p).slice(1).join(' | '), p.name, p.category, productTypeOf(p), frascoLabel(p), p.brand||'', p.stock+' '+p.unit, fmtMoney(p.cost), fmtMoney(p.price), fmtMoney(p.priceWholesale||0), p.marketPrice?fmtMoney(p.marketPrice):'', st.label];
     const cells = values.map((v,ci)=>`<c r="${colLetter(ci)}${excelRow}" t="inlineStr"><is><t>${xmlEsc(String(v))}</t></is></c>`).join('');
     sheetRows += `<row r="${excelRow}" ht="${ROW_H}" customHeight="1">${cells}</row>`;
 
@@ -3473,7 +3546,7 @@ function exportProductsExcelWithPhotos(){
 
   const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<cols><col min="1" max="1" width="${COL_W}" customWidth="1"/><col min="4" max="4" width="30" customWidth="1"/></cols>
+<cols><col min="1" max="1" width="${COL_W}" customWidth="1"/><col min="4" max="4" width="20" customWidth="1"/><col min="5" max="5" width="30" customWidth="1"/></cols>
 <sheetData>${sheetRows}</sheetData>
 ${mediaFiles.length ? '<drawing r:id="rIdDrawing1"/>' : ''}
 </worksheet>`;
@@ -3549,14 +3622,15 @@ function exportProductsPDFWithPhotos(){
   const list = filteredSortedProducts();
   if(!list.length){ toast('No hay datos para exportar'); return; }
   const stamp = new Date().toLocaleDateString('es-ES');
-  const theadHtml = `<tr><th style="width:56px;">Foto</th><th>Código</th><th>EAN</th><th>Nombre</th><th>Categoría</th><th>Tipo</th><th>Frasco</th><th>Marca</th><th>Stock</th><th>Coste</th><th>P. minorista</th><th>P. mayorista</th><th>V. mercado</th><th>Estado</th></tr>`;
+  const theadHtml = `<tr><th style="width:56px;">Foto</th><th>Código</th><th>EAN</th><th>EAN adicionales</th><th>Nombre</th><th>Categoría</th><th>Tipo</th><th>Frasco</th><th>Marca</th><th>Stock</th><th>Coste</th><th>P. minorista</th><th>P. mayorista</th><th>V. mercado</th><th>Estado</th></tr>`;
   const tbodyHtml = list.map(p=>{
     const st = stockStatus(p);
     const photoCell = p.image ? `<img src="${p.image}" class="thumb" alt="">` : `<div class="thumb thumb-empty"></div>`;
     return `<tr>
       <td style="vertical-align:middle;">${photoCell}</td>
       <td style="vertical-align:middle;">${esc(p.sku)}</td>
-      <td style="vertical-align:middle;">${esc(p.ean||'')}</td>
+      <td style="vertical-align:middle;">${esc(allEans(p)[0]||'')}</td>
+      <td style="vertical-align:middle;">${esc(allEans(p).slice(1).join(' | '))}</td>
       <td style="vertical-align:middle;">${esc(p.name)}</td>
       <td style="vertical-align:middle;">${esc(p.category)}</td>
       <td style="vertical-align:middle;">${esc(productTypeOf(p))}</td>
